@@ -14,7 +14,7 @@ def read_requirements(filename: str):
 
 
 setup(
-    name="dynaflow",
+    name="py-dynaflow",
     version="1.0.0",
     description="A Dynamic Workflow Execution Tool for Python 🚀",
     long_description=read("README.md"),

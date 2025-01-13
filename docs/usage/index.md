@@ -27,7 +27,7 @@ The DynaFlow library allows users to define and execute flows through a JSON-lik
 Install the library using pip:
 
 ```bash
-pip install dynaflow
+pip install py-dynaflow
 ```
 
 ## Basic setup

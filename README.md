@@ -24,7 +24,7 @@ DynaFlow lib is ASL-based, so it shares most of its definitions. For more inform
 ### Install with pip
 
 ```bash
-pip install dynaflow
+pip install py-dynaflow
 ```
 
 ### Install from source
