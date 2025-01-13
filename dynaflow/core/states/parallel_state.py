@@ -14,4 +14,21 @@ class ParallelState(BaseStateWithErrorHandling):
         self.function_database = function_database
         self.search_function = search_function
 
-    def _process(self, data): ...
+    def _process(self, data):
+        """
+        Processes the given data by executing all branches in parallel with the same input data.
+        Args:
+            data (dict): The data to be processed.
+        Returns:
+            The results of all branches executed in parallel.
+
+        Note: DynaFlow is imported inside the method to avoid circular imports.
+        """
+        from dynaflow.core.executor import DynaFlow
+
+        results = []
+        for branch in self.branches:
+            executor = DynaFlow(branch, self.function_database, self.search_function)
+            results.append(executor.run(data))
+
+        return results
