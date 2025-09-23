@@ -39,4 +39,7 @@ setup(
         "Source": "https://github.com/sgg10/dynaflow/",
         "Repository": "https://github.com/sgg10/dynaflow/",
     },
+    entry_points={
+        "console_scripts": ["dynaflow=dynaflow.cli:cli"],
+    },
 )
