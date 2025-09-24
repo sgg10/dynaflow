@@ -1112,6 +1112,7 @@
     onSelectNode,
     onMoveNode,
     onOpenFlow,
+    onMeasureNode,
     pan,
     onPanChange
   }) {
@@ -1229,6 +1230,7 @@
                 onSelect: onSelectNode,
                 onMove: onMoveNode,
                 onOpenFlow,
+                onMeasure: onMeasureNode,
                 isStart: flow.startNodeId === node.id,
                 isEnd: Boolean(node.transitions.end)
               });
@@ -1238,7 +1240,16 @@
     ]);
   }
 
-  function NodeCard({ node, selected, onSelect, onMove, onOpenFlow, isStart, isEnd }) {
+  function NodeCard({
+    node,
+    selected,
+    onSelect,
+    onMove,
+    onOpenFlow,
+    onMeasure,
+    isStart,
+    isEnd
+  }) {
     const ref = useRef(null);
 
     const handleDoubleClick = useCallback(() => {
@@ -1256,7 +1267,7 @@
 
     const handleMouseDown = useCallback((event) => {
       if (event.button !== 0) return;
-      
+
       console.log('🖱️ MOUSEDOWN en nodo:', node.id);
       event.preventDefault();
       
@@ -1296,10 +1307,73 @@
           console.log('🛑 FIN ARRASTRE del nodo:', node.id);
         }
       };
-      
+
       document.addEventListener('mousemove', handleMouseMove);
       document.addEventListener('mouseup', handleMouseUp);
     }, [node.id, node.position, onMove]);
+
+    useEffect(() => {
+      if (!ref.current || !onMeasure) {
+        return;
+      }
+
+      const element = ref.current;
+      let frame = null;
+
+      const updateRect = () => {
+        if (!element) {
+          return;
+        }
+        onMeasure(node.id, {
+          left: node.position.x,
+          top: node.position.y,
+          width: element.offsetWidth,
+          height: element.offsetHeight
+        });
+      };
+
+      frame = requestAnimationFrame(updateRect);
+
+      let resizeObserver = null;
+      if (typeof ResizeObserver === 'function') {
+        resizeObserver = new ResizeObserver(() => {
+          if (frame) {
+            cancelAnimationFrame(frame);
+          }
+          frame = requestAnimationFrame(updateRect);
+        });
+        resizeObserver.observe(element);
+      }
+
+      return () => {
+        if (frame) {
+          cancelAnimationFrame(frame);
+        }
+        if (resizeObserver) {
+          resizeObserver.disconnect();
+        }
+      };
+    }, [
+      node.id,
+      node.position.x,
+      node.position.y,
+      node.name,
+      node.comment,
+      node.type,
+      node.transitions.end,
+      node.branchFlowIds && node.branchFlowIds.length,
+      onMeasure
+    ]);
+
+    useEffect(() => {
+      if (!onMeasure) {
+        return () => {};
+      }
+      const nodeId = node.id;
+      return () => {
+        onMeasure(nodeId, null);
+      };
+    }, [node.id, onMeasure]);
 
     const className = `${getNodeClass(node.type)}${selected ? ' selected' : ''}`;
 
@@ -1512,6 +1586,17 @@
       onChange(newValue ? newValue : null);
     };
 
+    const renderOption = (option) =>
+      h(
+        'option',
+        {
+          key: option.id,
+          value: option.id,
+          selected: option.id === currentValue
+        },
+        option.label
+      );
+
     return h(
       'select',
       {
@@ -1520,10 +1605,8 @@
         onChange: handleChange
       },
       [
-        h('option', { value: '' }, '— None —'),
-        ...nextOptions.map((option) =>
-          h('option', { key: option.id, value: option.id }, option.label)
-        )
+        h('option', { value: '', selected: currentValue === '' }, '— None —'),
+        ...nextOptions.map(renderOption)
       ]
     );
   }
@@ -2577,40 +2660,29 @@
     useCatalogs(dispatch);
     useToasts(state, dispatch);
 
-    useEffect(() => {
-      if (!flow || !canvasRef.current) return;
-
-      // Usar requestAnimationFrame para asegurar que el layout esté completo
-      const captureRects = () => {
-        const container = canvasRef.current;
-        if (!container) return;
-        
-        const rects = {};
-        const containerRect = container.getBoundingClientRect();
-        
-        // Buscar nodos directamente en el container
-        flow.order.forEach((nodeId) => {
-          const element = container.querySelector(`[data-node-id="${nodeId}"]`);
-          if (element) {
-            const rect = element.getBoundingClientRect();
-            rects[nodeId] = {
-              left: rect.left - containerRect.left,
-              top: rect.top - containerRect.top,
-              width: rect.width,
-              height: rect.height
-            };
-            console.log('📐 Rect capturado para', nodeId, ':', rects[nodeId]);
-          } else {
-            console.log('❌ No se encontró elemento para', nodeId);
+    const handleMeasureNodeRect = useCallback((nodeId, rect) => {
+      setNodeRects((prev) => {
+        if (rect) {
+          const existing = prev[nodeId];
+          if (
+            existing &&
+            existing.left === rect.left &&
+            existing.top === rect.top &&
+            existing.width === rect.width &&
+            existing.height === rect.height
+          ) {
+            return prev;
           }
-        });
-        
-        console.log('📐 RequestAnimationFrame: nodeRects capturados:', Object.keys(rects).length);
-        setNodeRects(rects);
-      };
-
-      requestAnimationFrame(captureRects);
-    }, [flow, state.revision]);
+          return { ...prev, [nodeId]: rect };
+        }
+        if (!prev[nodeId]) {
+          return prev;
+        }
+        const next = { ...prev };
+        delete next[nodeId];
+        return next;
+      });
+    }, []);
 
     useEffect(() => {
       if (!flow) {
