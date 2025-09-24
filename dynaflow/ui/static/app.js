@@ -1550,14 +1550,7 @@
         const { sourceSide, targetSide, orientation } = pickConnection(source, target);
         const sourceAnchor = getAnchor(source, sourceSide);
         const targetAnchor = getAnchor(target, targetSide);
-        const baseDx = targetAnchor.x - sourceAnchor.x;
-        const baseDy = targetAnchor.y - sourceAnchor.y;
-        const baseDistance = Math.hypot(baseDx, baseDy);
-        const startOffset = Math.min(
-          16,
-          Math.min(baseDistance * 0.5, Math.max(baseDistance * 0.3, 4))
-        );
-        const startPoint = offsetPoint(sourceAnchor, sourceSide, startOffset);
+        const startPoint = sourceAnchor;
 
         let arrowVec = {
           x: targetAnchor.x - startPoint.x,
