@@ -1517,9 +1517,9 @@
               d: path,
               fill: 'none',
               stroke: '#38bdf8',
-              strokeWidth: 3,
-              strokeLinecap: 'round',
-              strokeLinejoin: 'round',
+              'stroke-width': 3,
+              'stroke-linecap': 'round',
+              'stroke-linejoin': 'round',
               opacity: 0.9
             }),
             h('path', {
@@ -2995,6 +2995,7 @@
           onSelectNode: handleSelectNode,
           onMoveNode: handleMoveNode,
           onOpenFlow: handleNavigateFlow,
+          onMeasureNode: handleMeasureNodeRect,
           pan,
           onPanChange: handlePanChange
         }),

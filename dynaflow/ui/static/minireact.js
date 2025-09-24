@@ -1,6 +1,7 @@
 (function (global) {
   const TEXT_ELEMENT = "__text__";
   const Fragment = Symbol("Fragment");
+  const SVG_NS = "http://www.w3.org/2000/svg";
 
   class ComponentInstance {
     constructor(type, key) {
@@ -80,6 +81,31 @@
     return snapshot;
   }
 
+  function captureScrollSnapshot(container) {
+    if (!container) {
+      return [];
+    }
+    const result = [];
+    const elements = container.querySelectorAll("[data-mini-path]");
+    elements.forEach((element) => {
+      const path = element.getAttribute("data-mini-path");
+      if (!path) {
+        return;
+      }
+      const canScrollY = element.scrollHeight > element.clientHeight + 1;
+      const canScrollX = element.scrollWidth > element.clientWidth + 1;
+      if (!canScrollY && !canScrollX) {
+        return;
+      }
+      result.push({
+        path,
+        top: canScrollY ? element.scrollTop : null,
+        left: canScrollX ? element.scrollLeft : null
+      });
+    });
+    return result;
+  }
+
   function restoreFocusSnapshot(snapshot) {
     if (!snapshot || !rootContainer) {
       return;
@@ -112,6 +138,26 @@
         // ignore selection errors
       }
     }
+  }
+
+  function restoreScrollSnapshot(snapshot) {
+    if (!snapshot || !rootContainer) {
+      return;
+    }
+    snapshot.forEach((entry) => {
+      const target = rootContainer.querySelector(
+        `[data-mini-path="${escapeSelector(entry.path)}"]`
+      );
+      if (!target) {
+        return;
+      }
+      if (entry.top != null) {
+        target.scrollTop = entry.top;
+      }
+      if (entry.left != null) {
+        target.scrollLeft = entry.left;
+      }
+    });
   }
 
   function createElement(type, props, ...children) {
@@ -165,23 +211,27 @@
       return;
     }
     const focusSnapshot = captureFocusSnapshot(rootContainer);
+    const scrollSnapshot = captureScrollSnapshot(rootContainer);
     visitedInstances = new Set();
     queuedEffects = [];
     while (rootContainer.firstChild) {
       rootContainer.removeChild(rootContainer.firstChild);
     }
-    renderNode(rootElement, rootContainer, "root");
+    renderNode(rootElement, rootContainer, "root", null);
     cleanupUnusedInstances();
+    restoreScrollSnapshot(scrollSnapshot);
     restoreFocusSnapshot(focusSnapshot);
     runQueuedEffects();
   }
 
-  function renderNode(element, container, path) {
+  function renderNode(element, container, path, namespace) {
     if (element == null) {
       return;
     }
     if (Array.isArray(element)) {
-      element.forEach((child, index) => renderNode(child, container, path + "." + index));
+      element.forEach((child, index) =>
+        renderNode(child, container, path + "." + index, namespace)
+      );
       return;
     }
 
@@ -194,7 +244,9 @@
 
     if (type === Fragment) {
       const fragmentChildren = props.children || [];
-      fragmentChildren.forEach((child, index) => renderNode(child, container, path + "." + index));
+      fragmentChildren.forEach((child, index) =>
+        renderNode(child, container, path + "." + index, namespace)
+      );
       return;
     }
 
@@ -214,13 +266,17 @@
       instance.hookIndex = 0;
       instance.pendingEffects = [];
       const output = type(Object.assign({}, props));
-      renderNode(output, container, key);
+      renderNode(output, container, key, namespace);
       queuedEffects.push({ key, instance, effects: instance.pendingEffects.slice() });
       currentInstance = prevInstance;
       return;
     }
 
-    const dom = document.createElement(type);
+    const isSvg = namespace === SVG_NS || type === "svg";
+    const nextNamespace = type === "svg" ? SVG_NS : namespace;
+    const dom = isSvg
+      ? document.createElementNS(SVG_NS, type)
+      : document.createElement(type);
     visitedInstances.add(path);
     if (dom.dataset) {
       dom.dataset.miniPath = path;
@@ -229,7 +285,9 @@
     }
     applyProps(dom, {}, props || {});
     const children = props && props.children ? props.children : [];
-    children.forEach((child, index) => renderNode(child, dom, path + ":" + index));
+    children.forEach((child, index) =>
+      renderNode(child, dom, path + ":" + index, nextNamespace)
+    );
     if (
       type === "select" &&
       props &&
