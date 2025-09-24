@@ -1111,16 +1111,36 @@
     onDropNode,
     onSelectNode,
     onMoveNode,
-    onOpenFlow
+    onOpenFlow,
+    pan,
+    onPanChange
   }) {
+    const panStateRef = useRef(pan);
+    const dragStartRef = useRef({ x: 0, y: 0 });
+    const pointerStartRef = useRef({ x: 0, y: 0 });
+    const [isPanning, setIsPanning] = useState(false);
+
+    useEffect(() => {
+      panStateRef.current = pan;
+    }, [pan]);
+
+    const attachCanvasRef = useCallback(
+      (element) => {
+        if (canvasRef) {
+          canvasRef.current = element;
+        }
+      },
+      [canvasRef]
+    );
+
     const handleDrop = (event) => {
       event.preventDefault();
       const nodeType = event.dataTransfer.getData('application/x-node-type');
-      if (!nodeType || !flow) return;
+      if (!nodeType || !flow || !canvasRef || !canvasRef.current) return;
       const rect = canvasRef.current.getBoundingClientRect();
       const position = {
-        x: event.clientX - rect.left - 100,
-        y: event.clientY - rect.top - 40
+        x: event.clientX - rect.left - pan.x - 100,
+        y: event.clientY - rect.top - pan.y - 40
       };
       onDropNode(nodeType, position);
     };
@@ -1130,11 +1150,75 @@
       event.dataTransfer.dropEffect = 'copy';
     };
 
-    return h('div', { className: 'canvas', onDrop: handleDrop, onDragOver: handleDragOver }, [
-      h(LinkLayer, { edges, rects: nodeRects }),
-      h(
-        'div',
-        { className: 'canvas-inner', ref: canvasRef },
+    const handleBackgroundMouseDown = useCallback(
+      (event) => {
+        if (!canvasRef || !canvasRef.current) return;
+        if (event.button !== 0) return;
+        if (event.target !== canvasRef.current) return;
+
+        event.preventDefault();
+        pointerStartRef.current = { x: event.clientX, y: event.clientY };
+        dragStartRef.current = { ...panStateRef.current };
+        setIsPanning(true);
+        document.body.style.cursor = 'grabbing';
+
+        const handleMouseMove = (moveEvent) => {
+          const dx = moveEvent.clientX - pointerStartRef.current.x;
+          const dy = moveEvent.clientY - pointerStartRef.current.y;
+          onPanChange({
+            x: dragStartRef.current.x + dx,
+            y: dragStartRef.current.y + dy
+          });
+        };
+
+        const handleMouseUp = () => {
+          document.removeEventListener('mousemove', handleMouseMove);
+          document.removeEventListener('mouseup', handleMouseUp);
+          document.body.style.cursor = '';
+          setIsPanning(false);
+        };
+
+        document.addEventListener('mousemove', handleMouseMove);
+        document.addEventListener('mouseup', handleMouseUp);
+      },
+      [canvasRef, onPanChange]
+    );
+
+    const handleWheel = useCallback(
+      (event) => {
+        if (event.ctrlKey) {
+          return;
+        }
+        event.preventDefault();
+        const nextPan = {
+          x: panStateRef.current.x - event.deltaX,
+          y: panStateRef.current.y - event.deltaY
+        };
+        onPanChange(nextPan);
+      },
+      [onPanChange]
+    );
+
+    return h(
+      'div',
+      {
+        className: 'canvas',
+        onDrop: handleDrop,
+        onDragOver: handleDragOver,
+        onWheel: handleWheel
+      },
+      [
+        h(LinkLayer, { edges, rects: nodeRects, pan }),
+        h(
+          'div',
+          {
+            className: `canvas-inner${isPanning ? ' is-panning' : ''}`,
+            ref: attachCanvasRef,
+            onMouseDown: handleBackgroundMouseDown,
+            style: {
+              transform: `translate(${pan.x}px, ${pan.y}px)`
+            }
+          },
         flow && flow.order.length
           ? flow.order.map((nodeId) => {
               const node = flow.nodes[nodeId];
@@ -1144,7 +1228,9 @@
                 selected: selection && selection.nodeId === node.id,
                 onSelect: onSelectNode,
                 onMove: onMoveNode,
-                onOpenFlow
+                onOpenFlow,
+                isStart: flow.startNodeId === node.id,
+                isEnd: Boolean(node.transitions.end)
               });
             })
           : h('div', { className: 'empty-state' }, 'Drag a node from the palette to begin designing your flow.')
@@ -1152,7 +1238,7 @@
     ]);
   }
 
-  function NodeCard({ node, selected, onSelect, onMove, onOpenFlow }) {
+  function NodeCard({ node, selected, onSelect, onMove, onOpenFlow, isStart, isEnd }) {
     const ref = useRef(null);
 
     const handleDoubleClick = useCallback(() => {
@@ -1232,6 +1318,8 @@
         onDoubleClick: handleDoubleClick
       },
       [
+        isStart ? h('span', { className: 'node-marker node-marker-start', title: 'Start state' }) : null,
+        isEnd ? h('span', { className: 'node-marker node-marker-end', title: 'End state' }) : null,
         h('div', { className: 'title' }, [
           h('strong', null, node.name),
           h('span', { className: 'tag' }, node.type)
@@ -1251,9 +1339,9 @@
     );
   }
 
-  function LinkLayer({ edges, rects }) {
-    console.log('🔗 LinkLayer render:', { 
-      edgesCount: edges.length, 
+  function LinkLayer({ edges, rects, pan }) {
+    console.log('🔗 LinkLayer render:', {
+      edgesCount: edges.length,
       edges: edges,
       rectsKeys: Object.keys(rects)
     });
@@ -1265,11 +1353,17 @@
     
     return h(
       'svg',
-      { 
+      {
         className: 'link-canvas',
         width: '100%',
         height: '100%',
-        style: { position: 'absolute', top: 0, left: 0, zIndex: 10 }
+        style: {
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          zIndex: 10,
+          transform: `translate(${pan.x}px, ${pan.y}px)`
+        }
       },
       edges.map((edge) => {
         const source = rects[edge.from];
@@ -1411,30 +1505,17 @@
   }
 
   function NextStateSelect({ node, nextOptions, onChange }) {
-    const [localValue, setLocalValue] = useState(node.transitions.next || '');
-    
-    // Sincronizar valor local cuando cambia el nodo
-    useEffect(() => {
-      const expectedValue = node.transitions.next || '';
-      console.log('🔄 NextStateSelect sync:', { 
-        localValue, 
-        expectedValue, 
-        nodeId: node.id 
-      });
-      setLocalValue(expectedValue);
-    }, [node.transitions.next, node.id]);
-    
+    const currentValue = node.transitions.next || '';
+
     const handleChange = (event) => {
       const newValue = event.target.value;
-      console.log('🔄 NextStateSelect handleChange:', { from: localValue, to: newValue });
-      setLocalValue(newValue);
-      onChange(event);
+      onChange(newValue ? newValue : null);
     };
-    
+
     return h(
       'select',
       {
-        value: localValue,
+        value: currentValue,
         disabled: node.transitions.end,
         onChange: handleChange
       },
@@ -1448,31 +1529,18 @@
   }
 
   function NodeGeneralSettings({ flow, node, dispatch }) {
-    const selectRef = useRef(null);
-    
     console.log('🔧 NodeGeneralSettings render:', {
       nodeId: node.id,
       nodeName: node.name,
       currentNext: node.transitions.next,
       allTransitions: node.transitions
     });
-    
+
     const nextOptions = flow.order
       .filter((id) => id !== node.id)
       .map((id) => ({ id, label: flow.nodes[id].name }));
-      
+
     console.log('🔧 NextOptions disponibles:', nextOptions);
-    
-    // Forzar sincronización del select cuando cambia node.transitions.next
-    useEffect(() => {
-      if (selectRef.current) {
-        const expectedValue = node.transitions.next || '';
-        if (selectRef.current.value !== expectedValue) {
-          console.log('🔧 Sincronizando select:', selectRef.current.value, '->', expectedValue);
-          selectRef.current.value = expectedValue;
-        }
-      }
-    }, [node.transitions.next]);
 
     const handleNameChange = useCallback((event) => {
       const value = event.target.value;
@@ -1511,12 +1579,11 @@
       });
     };
 
-    const handleNextChange = (event) => {
-      const nextValue = event.target.value || null;
-      console.log('🔄 handleNextChange:', { 
-        from: node.transitions.next, 
-        to: nextValue, 
-        nodeId: node.id 
+    const handleNextChange = (nextValue) => {
+      console.log('🔄 handleNextChange:', {
+        from: node.transitions.next,
+        to: nextValue,
+        nodeId: node.id
       });
       dispatch({
         type: 'UPDATE_NODE',
@@ -1573,11 +1640,7 @@
       supportsNextTransition(node.type)
         ? h('div', { className: 'form-field' }, [
             h('label', null, 'Next state'),
-            h(NextStateSelect, {
-              node,
-              nextOptions,
-              onChange: handleNextChange
-            })
+            h(NextStateSelect, { node, nextOptions, onChange: handleNextChange })
           ])
         : null,
       h('div', { className: 'switch-row' }, [
@@ -2503,9 +2566,10 @@
     const [nodeRects, setNodeRects] = useState({});
     const [installPending, setInstallPending] = useState(false);
     const [installError, setInstallError] = useState('');
+    const [pan, setPan] = useState({ x: 0, y: 0 });
     const canvasRef = useRef(null);
     const flow = state.flows[state.currentFlowId];
-    
+
     // Exponer estado para debugging
     window.debugState = state;
     window.debugDispatch = dispatch;
@@ -2515,7 +2579,7 @@
 
     useEffect(() => {
       if (!flow || !canvasRef.current) return;
-      
+
       // Usar requestAnimationFrame para asegurar que el layout esté completo
       const captureRects = () => {
         const container = canvasRef.current;
@@ -2544,9 +2608,16 @@
         console.log('📐 RequestAnimationFrame: nodeRects capturados:', Object.keys(rects).length);
         setNodeRects(rects);
       };
-      
+
       requestAnimationFrame(captureRects);
     }, [flow, state.revision]);
+
+    useEffect(() => {
+      if (!flow) {
+        return;
+      }
+      setPan({ x: 0, y: 0 });
+    }, [flow && flow.id]);
 
     const edges = useMemo(() => computeEdges(flow), [flow, state.revision]);
 
@@ -2592,6 +2663,15 @@
       },
       [dispatch]
     );
+
+    const handlePanChange = useCallback((nextPan) => {
+      setPan((prev) => {
+        if (prev.x === nextPan.x && prev.y === nextPan.y) {
+          return prev;
+        }
+        return nextPan;
+      });
+    }, []);
 
     const handleDownload = () => {
       const payload = buildFlowExport(state);
@@ -2759,7 +2839,9 @@
           onDropNode: handleDropNode,
           onSelectNode: handleSelectNode,
           onMoveNode: handleMoveNode,
-          onOpenFlow: handleNavigateFlow
+          onOpenFlow: handleNavigateFlow,
+          pan,
+          onPanChange: handlePanChange
         }),
         h(ConfigPanel, {
           flows: state.flows,
