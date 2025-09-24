@@ -361,6 +361,7 @@ body {
   background-size: 80px 80px;
   mask-image: radial-gradient(circle at center, rgba(255, 255, 255, 0.8), transparent 70%);
   pointer-events: none;
+  z-index: 0;
 }
 
 .canvas-inner {
@@ -369,6 +370,7 @@ body {
   height: 100%;
   cursor: grab;
   transition: transform 0.12s ease-out;
+  z-index: 2;
 }
 
 .canvas-inner.is-panning {
@@ -390,6 +392,7 @@ body {
   -moz-user-select: none;
   -ms-user-select: none;
   transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+  z-index: 3;
 }
 
 .node-marker {
@@ -531,7 +534,7 @@ body {
 
 .link-canvas path {
   stroke: var(--accent);
-  stroke-width: 2;
+  stroke-width: 3;
   fill: none;
   opacity: 0.8;
 }
@@ -893,8 +896,26 @@ body {
   background: rgba(30, 41, 59, 0.7);
   margin-bottom: 12px;
   display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.branch-card-header {
+  display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
+}
+
+.branch-name {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.branch-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .branch-card button {
@@ -908,6 +929,28 @@ body {
 
 .branch-card button:hover {
   background: rgba(56, 189, 248, 0.3);
+}
+
+.branch-card .form-field {
+  margin-bottom: 0;
+}
+
+.form-field.condensed label {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.form-field.condensed select {
+  width: 100%;
+}
+
+.branch-hint {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  background: rgba(148, 163, 184, 0.08);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
 }
 
 @media (max-width: 1280px) {

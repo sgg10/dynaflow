@@ -20,6 +20,100 @@
   let visitedInstances = new Set();
   let queuedEffects = [];
 
+  const NON_TEXT_INPUT_TYPES = new Set([
+    "button",
+    "checkbox",
+    "color",
+    "file",
+    "hidden",
+    "image",
+    "radio",
+    "range",
+    "reset",
+    "submit"
+  ]);
+
+  function isTextLikeElement(element) {
+    if (!element) {
+      return false;
+    }
+    const tag = element.tagName;
+    if (tag === "TEXTAREA") {
+      return true;
+    }
+    if (tag === "INPUT") {
+      const type = (element.type || "").toLowerCase();
+      return !NON_TEXT_INPUT_TYPES.has(type);
+    }
+    return Boolean(element.isContentEditable);
+  }
+
+  function escapeSelector(value) {
+    if (global.CSS && typeof global.CSS.escape === "function") {
+      return global.CSS.escape(value);
+    }
+    return String(value).replace(/["\\]/g, "\\$&");
+  }
+
+  function captureFocusSnapshot(container) {
+    if (!container) {
+      return null;
+    }
+    const active = document.activeElement;
+    if (!active || !container.contains(active)) {
+      return null;
+    }
+    const path = active.dataset ? active.dataset.miniPath : null;
+    if (!path) {
+      return null;
+    }
+    const snapshot = { path };
+    if (isTextLikeElement(active)) {
+      try {
+        snapshot.selectionStart = active.selectionStart;
+        snapshot.selectionEnd = active.selectionEnd;
+      } catch (err) {
+        snapshot.selectionStart = null;
+        snapshot.selectionEnd = null;
+      }
+    }
+    return snapshot;
+  }
+
+  function restoreFocusSnapshot(snapshot) {
+    if (!snapshot || !rootContainer) {
+      return;
+    }
+    const target = rootContainer.querySelector(
+      `[data-mini-path="${escapeSelector(snapshot.path)}"]`
+    );
+    if (!target || typeof target.focus !== "function" || target.hasAttribute("disabled")) {
+      return;
+    }
+    try {
+      target.focus({ preventScroll: true });
+    } catch (err) {
+      target.focus();
+    }
+    if (
+      snapshot.selectionStart != null &&
+      typeof target.setSelectionRange === "function" &&
+      isTextLikeElement(target)
+    ) {
+      const value = target.value != null ? String(target.value) : "";
+      const length = value.length;
+      const start = Math.max(0, Math.min(snapshot.selectionStart, length));
+      const end = snapshot.selectionEnd != null
+        ? Math.max(0, Math.min(snapshot.selectionEnd, length))
+        : start;
+      try {
+        target.setSelectionRange(start, end);
+      } catch (err) {
+        // ignore selection errors
+      }
+    }
+  }
+
   function createElement(type, props, ...children) {
     const normalized = [];
     const rawChildren = (props && props.children) || [];
@@ -70,6 +164,7 @@
     if (!rootContainer || !rootElement) {
       return;
     }
+    const focusSnapshot = captureFocusSnapshot(rootContainer);
     visitedInstances = new Set();
     queuedEffects = [];
     while (rootContainer.firstChild) {
@@ -77,6 +172,7 @@
     }
     renderNode(rootElement, rootContainer, "root");
     cleanupUnusedInstances();
+    restoreFocusSnapshot(focusSnapshot);
     runQueuedEffects();
   }
 
@@ -126,9 +222,28 @@
 
     const dom = document.createElement(type);
     visitedInstances.add(path);
+    if (dom.dataset) {
+      dom.dataset.miniPath = path;
+    } else {
+      dom.setAttribute("data-mini-path", path);
+    }
     applyProps(dom, {}, props || {});
     const children = props && props.children ? props.children : [];
     children.forEach((child, index) => renderNode(child, dom, path + ":" + index));
+    if (
+      type === "select" &&
+      props &&
+      Object.prototype.hasOwnProperty.call(props, "value")
+    ) {
+      dom.value = props.value == null ? "" : props.value;
+    }
+    if (
+      (type === "input" || type === "textarea") &&
+      props &&
+      Object.prototype.hasOwnProperty.call(props, "value")
+    ) {
+      dom.value = props.value == null ? "" : props.value;
+    }
     container.appendChild(dom);
   }
 
@@ -166,6 +281,16 @@
     if (name.startsWith("on") && typeof value === "function") {
       const eventName = name.slice(2).toLowerCase();
       dom.addEventListener(eventName, value);
+      return;
+    }
+    if (name === "selected" && "selected" in dom) {
+      const isSelected = Boolean(value);
+      dom.selected = isSelected;
+      if (!isSelected) {
+        dom.removeAttribute("selected");
+      } else {
+        dom.setAttribute("selected", "");
+      }
       return;
     }
     if (name === "value" && "value" in dom) {

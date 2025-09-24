@@ -23,15 +23,29 @@
   ];
 
   const CHOICE_OPERATORS = [
-    "StringEquals",
-    "StringMatches",
+    "BooleanEquals",
+    "IsBoolean",
+    "IsElementPresent",
+    "IsNull",
+    "IsNumeric",
+    "IsString",
+    "IsTimestamp",
     "NumericEquals",
     "NumericGreaterThan",
+    "NumericGreaterThanEquals",
     "NumericLessThan",
-    "BooleanEquals",
+    "NumericLessThanEquals",
+    "StringEquals",
+    "StringGreaterThan",
+    "StringGreaterThanEquals",
+    "StringLessThan",
+    "StringLessThanEquals",
+    "StringMatches",
     "TimestampEquals",
+    "TimestampGreaterThan",
+    "TimestampGreaterThanEquals",
     "TimestampLessThan",
-    "TimestampGreaterThan"
+    "TimestampLessThanEquals"
   ];
 
   const WAIT_MODES = [
@@ -40,6 +54,9 @@
     { id: "secondsPath", label: "Seconds Path" },
     { id: "timestampPath", label: "Timestamp Path" }
   ];
+
+  const DEFAULT_NODE_WIDTH = 220;
+  const DEFAULT_NODE_HEIGHT = 110;
 
   const NODE_NAME_PREFIX = {
     Task: "Task",
@@ -1209,7 +1226,7 @@
         onWheel: handleWheel
       },
       [
-        h(LinkLayer, { edges, rects: nodeRects, pan }),
+        h(LinkLayer, { edges, rects: nodeRects, nodes: flow ? flow.nodes : {}, pan }),
         h(
           'div',
           {
@@ -1413,18 +1430,28 @@
     );
   }
 
-  function LinkLayer({ edges, rects, pan }) {
-    console.log('🔗 LinkLayer render:', {
-      edgesCount: edges.length,
-      edges: edges,
-      rectsKeys: Object.keys(rects)
-    });
-    
+  function LinkLayer({ edges, rects, nodes, pan }) {
     if (!edges.length) {
-      console.log('❌ No hay edges para renderizar');
       return null;
     }
-    
+
+    const resolveRect = (id) => {
+      if (rects && rects[id]) {
+        return rects[id];
+      }
+      const node = nodes && nodes[id];
+      if (!node) {
+        return null;
+      }
+      const position = node.position || { x: 0, y: 0 };
+      return {
+        left: position.x,
+        top: position.y,
+        width: DEFAULT_NODE_WIDTH,
+        height: DEFAULT_NODE_HEIGHT
+      };
+    };
+
     return h(
       'svg',
       {
@@ -1435,64 +1462,77 @@
           position: 'absolute',
           top: 0,
           left: 0,
-          zIndex: 10,
           transform: `translate(${pan.x}px, ${pan.y}px)`
         }
       },
       edges.map((edge) => {
-        const source = rects[edge.from];
-        const target = rects[edge.to];
-        console.log('🎯 Procesando edge:', edge.id, { 
-          from: edge.from, 
-          to: edge.to, 
-          hasSource: !!source, 
-          hasTarget: !!target 
-        });
-        
-        if (!source || !target) {
-          console.log('❌ Edge sin rects:', edge.id, { source, target });
+        if (!edge || edge.from === edge.to) {
           return null;
         }
-        const startX = source.left + source.width;
-        const startY = source.top + source.height / 2;
-        const endX = target.left;
-        const endY = target.top + target.height / 2;
-        
-        // Path simple y directo - línea recta con una pequeña curva
-        const midX = startX + (endX - startX) * 0.6;
-        const path = `M ${startX} ${startY} Q ${midX} ${startY} ${endX - 10} ${endY}`;
-        
-        console.log('🎨 DIBUJANDO flecha simple:', {
-          edge: edge.id,
-          coords: `${startX},${startY} -> ${endX},${endY}`,
-          path,
-          sourceSize: `${source.width}x${source.height}`,
-          targetSize: `${target.width}x${target.height}`
-        });
-        
+
+        const source = resolveRect(edge.from);
+        const target = resolveRect(edge.to);
+
+        if (!source || !target) {
+          return null;
+        }
+
+        const sourceX = source.left + source.width;
+        const sourceY = source.top + source.height / 2;
+        const targetX = target.left;
+        const targetY = target.top + target.height / 2;
+
+        const direction = targetX >= sourceX ? 1 : -1;
+        const deltaX = Math.abs(targetX - sourceX);
+        const curve = Math.min(Math.max(deltaX * 0.5, 48), 240);
+        const control1X = sourceX + curve * direction;
+        const control2X = targetX - curve * direction;
+        const control1Y = sourceY;
+        const control2Y = targetY;
+
+        const dx = targetX - sourceX;
+        const dy = targetY - sourceY;
+        const angle = Math.atan2(dy, dx === 0 ? direction * 0.0001 : dx);
+        const arrowTipX = targetX - direction * 6;
+        const arrowTipY = targetY;
+        const lineEndX = arrowTipX - Math.cos(angle) * 8;
+        const lineEndY = arrowTipY - Math.sin(angle) * 8;
+        const path = `M ${sourceX} ${sourceY} C ${control1X} ${control1Y} ${control2X} ${control2Y} ${lineEndX} ${lineEndY}`;
+
+        const headLength = 10;
+        const leftX = arrowTipX - headLength * Math.cos(angle - Math.PI / 6);
+        const leftY = arrowTipY - headLength * Math.sin(angle - Math.PI / 6);
+        const rightX = arrowTipX - headLength * Math.cos(angle + Math.PI / 6);
+        const rightY = arrowTipY - headLength * Math.sin(angle + Math.PI / 6);
+        const arrowHead = `M ${arrowTipX} ${arrowTipY} L ${leftX} ${leftY} L ${rightX} ${rightY} Z`;
+
+        const labelX = sourceX + (targetX - sourceX) * 0.5;
+        const labelY = sourceY + (targetY - sourceY) * 0.5 - 8;
+
         return h(
           'g',
-          { key: edge.id },
+          { key: edge.id, className: 'link-edge' },
           [
             h('path', {
               d: path,
               fill: 'none',
               stroke: '#38bdf8',
-              strokeWidth: 4,
-              opacity: 1
+              strokeWidth: 3,
+              strokeLinecap: 'round',
+              strokeLinejoin: 'round',
+              opacity: 0.9
             }),
-            h('circle', {
-              cx: endX - 10,
-              cy: endY,
-              r: 6,
-              fill: '#38bdf8'
+            h('path', {
+              d: arrowHead,
+              fill: '#38bdf8',
+              opacity: 0.95
             }),
             edge.label
               ? h(
                   'text',
                   {
-                    x: midX,
-                    y: startY + (endY - startY) * 0.5 - 6,
+                    x: labelX,
+                    y: labelY,
                     className: 'edge-label'
                   },
                   edge.label
@@ -2423,35 +2463,70 @@
       dispatch({ type: 'REMOVE_PARALLEL_BRANCH', flowId, nodeId: node.id, index });
     };
 
+    const renderBranch = (branchId, index) => {
+      const branch = flows[branchId];
+      const options = branch
+        ? branch.order.map((id) => ({ id, label: branch.nodes[id].name }))
+        : [];
+      const startNodeId = branch && branch.startNodeId ? branch.startNodeId : '';
+      const hasNodes = options.length > 0;
+
+      const handleStartChange = (event) => {
+        const value = event.target.value;
+        if (!value || !branch) {
+          return;
+        }
+        dispatch({ type: 'SET_FLOW_START', flowId: branchId, nodeId: value });
+      };
+
+      return h('div', { className: 'branch-card', key: branchId }, [
+        h('div', { className: 'branch-card-header' }, [
+          h('span', { className: 'branch-name' }, branch ? branch.label : `Branch ${index + 1}`),
+          h('div', { className: 'branch-actions' }, [
+            h(
+              'button',
+              { onClick: () => onNavigateFlow(branchId) },
+              'Open'
+            ),
+            branches.length > 1
+              ? h(
+                  'button',
+                  {
+                    onClick: () => removeBranch(index),
+                    style: {
+                      background: 'rgba(248,113,113,0.2)',
+                      color: 'rgba(248,113,113,0.9)'
+                    }
+                  },
+                  'Remove'
+                )
+              : null
+          ])
+        ]),
+        hasNodes
+          ? h('div', { className: 'form-field condensed' }, [
+              h('label', null, 'Start state'),
+              h(
+                'select',
+                {
+                  value: startNodeId,
+                  onChange: handleStartChange
+                },
+                [
+                  h('option', { value: '' }, '— Select —'),
+                  ...options.map((option) =>
+                    h('option', { key: option.id, value: option.id }, option.label)
+                  )
+                ]
+              )
+            ])
+          : h('div', { className: 'branch-hint' }, 'Add states to this branch to choose where it starts.')
+      ]);
+    };
+
     return h(Fragment, null, [
       branches.length
-        ? branches.map((branchId, index) => {
-            const branch = flows[branchId];
-            return h('div', { className: 'branch-card', key: branchId }, [
-              h('span', null, branch ? branch.label : `Branch ${index + 1}`),
-              h('div', null, [
-                h(
-                  'button',
-                  { onClick: () => onNavigateFlow(branchId) },
-                  'Open'
-                ),
-                branches.length > 1
-                  ? h(
-                      'button',
-                      {
-                        onClick: () => removeBranch(index),
-                        style: {
-                          marginLeft: '8px',
-                          background: 'rgba(248,113,113,0.2)',
-                          color: 'rgba(248,113,113,0.9)'
-                        }
-                      },
-                      'Remove'
-                    )
-                  : null
-              ])
-            ]);
-          })
+        ? branches.map((branchId, index) => renderBranch(branchId, index))
         : h('div', { className: 'empty-state' }, 'No branches defined yet.'),
       h(
         'button',
@@ -2689,6 +2764,14 @@
         return;
       }
       setPan({ x: 0, y: 0 });
+    }, [flow && flow.id]);
+
+    useEffect(() => {
+      if (!flow) {
+        setNodeRects({});
+        return;
+      }
+      setNodeRects({});
     }, [flow && flow.id]);
 
     const edges = useMemo(() => computeEdges(flow), [flow, state.revision]);
