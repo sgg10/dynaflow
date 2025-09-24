@@ -107,6 +107,47 @@ body {
   margin-left: 14px;
 }
 
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  margin-left: 14px;
+  font-size: 0.86rem;
+}
+
+.breadcrumb-item {
+  display: flex;
+  align-items: center;
+}
+
+.breadcrumb-separator {
+  margin: 0 8px;
+  color: var(--text-muted);
+}
+
+.breadcrumb-link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  font-size: 0.86rem;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.breadcrumb-link:hover {
+  background: rgba(56, 189, 248, 0.1);
+}
+
+.breadcrumb-current {
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 0.86rem;
+  font-weight: 600;
+  padding: 2px 4px;
+}
+
 .header-actions {
   display: flex;
   gap: 12px;
@@ -262,7 +303,8 @@ body {
   color: var(--text);
   background: rgba(30, 41, 59, 0.7);
   margin-bottom: 10px;
-  cursor: grab;
+  cursor: pointer;
+  user-select: none;
   transition: transform 0.15s ease, border-color 0.2s ease, background 0.2s ease;
 }
 
@@ -272,8 +314,36 @@ body {
   transform: translateY(-1px);
 }
 
+.node-type .node-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
 .node-type span {
   font-weight: 600;
+}
+
+.node-type .add-node-btn {
+  background: rgba(56, 189, 248, 0.8);
+  border: none;
+  border-radius: 50%;
+  width: 28px;
+  height: 28px;
+  color: white;
+  font-weight: bold;
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.node-type .add-node-btn:hover {
+  background: rgba(56, 189, 248, 1);
+  transform: scale(1.1);
 }
 
 .canvas {
@@ -308,12 +378,23 @@ body {
   box-shadow: 0 20px 45px rgba(15, 23, 42, 0.55);
   padding: 16px 18px;
   cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
   transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
 }
 
 .node-card:active {
   cursor: grabbing;
   transform: scale(1.02);
+}
+
+.node-card.dragging {
+  cursor: grabbing;
+  transform: scale(1.05);
+  z-index: 1000;
+  box-shadow: 0 30px 60px rgba(56, 189, 248, 0.4);
 }
 
 .node-card.selected {
@@ -404,6 +485,20 @@ body {
   position: absolute;
   inset: 0;
   pointer-events: none;
+  z-index: 1;
+}
+
+.link-canvas path {
+  stroke: var(--accent);
+  stroke-width: 2;
+  fill: none;
+  opacity: 0.8;
+}
+
+.link-canvas text {
+  fill: var(--text);
+  font-size: 11px;
+  font-weight: 500;
 }
 
 .edge-label {

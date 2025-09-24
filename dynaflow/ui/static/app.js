@@ -310,6 +310,7 @@
       case "TOGGLE_INSTALL_MODAL":
         return { ...state, showInstallModal: action.visible };
       case "SET_SELECTION":
+        console.log('🎯 SET_SELECTION action:', action.selection);
         return { ...state, selection: action.selection };
       case "CLEAR_SELECTION":
         return { ...state, selection: null };
@@ -328,8 +329,10 @@
           validation: { status: action.status, errors: action.errors || [] }
         };
       case "ADD_NODE": {
+        console.log('🔧 ADD_NODE action:', action);
         const flow = state.flows[action.flowId];
         if (!flow) {
+          console.error('Flow no encontrado:', action.flowId);
           return state;
         }
         return produce(state, (draft) => {
@@ -337,6 +340,18 @@
           const { node, flows: newFlows } = createNodeTemplate(action.nodeType, baseFlow, {
             position: action.position
           });
+          console.log('✅ Nodo creado:', node);
+          
+          // Auto-conectar al nodo anterior si existe
+          const lastNodeId = baseFlow.order[baseFlow.order.length - 1];
+          if (lastNodeId && baseFlow.nodes[lastNodeId]) {
+            const lastNode = baseFlow.nodes[lastNodeId];
+            if (!lastNode.transitions.next && !lastNode.transitions.end) {
+              console.log('🔗 Conectando automáticamente:', lastNodeId, '->', node.id);
+              lastNode.transitions.next = node.id;
+            }
+          }
+          
           baseFlow.nodes[node.id] = node;
           baseFlow.order.push(node.id);
           if (!baseFlow.startNodeId) {
@@ -350,8 +365,10 @@
         });
       }
       case "UPDATE_NODE_POSITION": {
+        console.log('🔄 UPDATE_NODE_POSITION action:', action);
         const flow = state.flows[action.flowId];
         if (!flow || !flow.nodes[action.nodeId]) {
+          console.error('Flow o nodo no encontrado:', { flowId: action.flowId, nodeId: action.nodeId });
           return state;
         }
         const node = flow.nodes[action.nodeId];
@@ -359,8 +376,10 @@
           node.position.x === action.position.x &&
           node.position.y === action.position.y
         ) {
+          console.log('Posición igual, no hay cambios');
           return state;
         }
+        console.log('✅ Actualizando posición del nodo:', { from: node.position, to: action.position });
         return produce(state, (draft) => {
           const updatedFlow = cloneFlow(flow);
           const updatedNode = cloneNode(updatedFlow.nodes[action.nodeId]);
@@ -384,6 +403,7 @@
             node.comment = action.changes.comment;
           }
           if (action.changes.transitions) {
+            console.log('🔗 Actualizando transiciones:', action.changes.transitions);
             node.transitions = { ...node.transitions, ...action.changes.transitions };
           }
           if (action.changes.config) {
@@ -393,6 +413,13 @@
           draft.flows[action.flowId] = updatedFlow;
           if (action.changes.start === true) {
             updatedFlow.startNodeId = node.id;
+          }
+          // Incrementar revision para forzar re-render de conexiones
+          draft.revision = (state.revision || 0) + 1;
+          
+          // Actualizar selection si es el nodo actual para refrescar ConfigPanel
+          if (state.selection && state.selection.nodeId === action.nodeId) {
+            draft.selection = { ...state.selection, nodeId: action.nodeId };
           }
         });
       }
@@ -774,7 +801,7 @@
   function useCatalogs(dispatch) {
     useEffect(() => {
       fetchCatalogs(dispatch);
-    }, [dispatch]);
+    }, []); // Solo ejecutar una vez al montar el componente
   }
 
   function fetchCatalogs(dispatch) {
@@ -801,10 +828,13 @@
   function computeEdges(flow) {
     if (!flow) return [];
     const edges = [];
+    console.log('🔗 Computando edges para flow:', flow.id, 'con nodos:', Object.keys(flow.nodes));
+    
     flow.order.forEach((nodeId) => {
       const node = flow.nodes[nodeId];
       if (!node) return;
       if (node.transitions.next) {
+        console.log('➡️ Creando edge:', nodeId, '->', node.transitions.next);
         edges.push({
           id: `next-${nodeId}`,
           from: nodeId,
@@ -815,6 +845,7 @@
       if (node.type === "Choice") {
         (node.config.choices || []).forEach((choice, index) => {
           if (choice.next) {
+            console.log('🔀 Creando choice edge:', nodeId, '->', choice.next);
             edges.push({
               id: `choice-${nodeId}-${index}`,
               from: nodeId,
@@ -824,6 +855,7 @@
           }
         });
         if (node.transitions.default) {
+          console.log('🔄 Creando default edge:', nodeId, '->', node.transitions.default);
           edges.push({
             id: `choice-default-${nodeId}`,
             from: nodeId,
@@ -833,6 +865,8 @@
         }
       }
     });
+    
+    console.log('🔗 Total edges creados:', edges.length, edges);
     return edges;
   }
 
@@ -855,11 +889,43 @@
     );
   }
 
-  function AppHeader({ flow, onDownload, onValidate, onOpenInstall, validation }) {
+  function AppHeader({ flow, flows, onDownload, onValidate, onOpenInstall, onNavigateFlow, validation }) {
+    // Construir breadcrumb desde el flow actual hacia arriba
+    const buildBreadcrumb = () => {
+      if (!flow) return [];
+      
+      const breadcrumb = [];
+      let currentFlow = flow;
+      
+      while (currentFlow) {
+        breadcrumb.unshift(currentFlow);
+        
+        if (currentFlow.parent && flows[currentFlow.parent.flowId]) {
+          currentFlow = flows[currentFlow.parent.flowId];
+        } else {
+          break;
+        }
+      }
+      
+      return breadcrumb;
+    };
+    
+    const breadcrumb = buildBreadcrumb();
+    
     return h('header', { className: 'app-header' }, [
       h('div', { className: 'title-block' }, [
         h('h1', { className: 'title' }, 'DynaFlow Studio'),
-        h('span', { className: 'tagline' }, flow ? flow.label : 'Workflow')
+        breadcrumb.length > 1 ? h('div', { className: 'breadcrumb' }, 
+          breadcrumb.map((breadFlow, index) => 
+            h('span', { key: breadFlow.id, className: 'breadcrumb-item' }, [
+              index > 0 ? h('span', { className: 'breadcrumb-separator' }, ' / ') : null,
+              h('button', {
+                className: breadFlow.id === flow.id ? 'breadcrumb-current' : 'breadcrumb-link',
+                onClick: () => breadFlow.id !== flow.id && onNavigateFlow(breadFlow.id)
+              }, breadFlow.label)
+            ])
+          )
+        ) : h('span', { className: 'tagline' }, flow ? flow.label : 'Workflow')
       ]),
       h('div', { className: 'header-actions' }, [
         h(
@@ -883,12 +949,42 @@
             onClick: onDownload
           },
           'Download JSON'
+        ),
+        h(
+          'button',
+          {
+            onClick: () => {
+              console.log('🧪 DEBUG STATE:', window.debugState);
+              console.log('🧪 CURRENT FLOW:', window.debugState?.flows[window.debugState?.currentFlowId]);
+            }
+          },
+          'Debug State'
+        ),
+        h(
+          'button',
+          {
+            onClick: () => {
+              const currentFlow = window.debugState?.flows[window.debugState?.currentFlowId];
+              if (currentFlow && currentFlow.order.length >= 2) {
+                const firstNode = currentFlow.order[0];
+                const secondNode = currentFlow.order[1];
+                console.log('🧪 TEST: Conectando manualmente', firstNode, '->', secondNode);
+                window.debugDispatch({
+                  type: 'UPDATE_NODE',
+                  flowId: currentFlow.id,
+                  nodeId: firstNode,
+                  changes: { transitions: { next: secondNode } }
+                });
+              }
+            }
+          },
+          'Test Connect'
         )
       ])
     ]);
   }
 
-  function Sidebar({ catalogs, onRefreshCatalog, onRemoveCatalog }) {
+  function Sidebar({ catalogs, onRefreshCatalog, onRemoveCatalog, onAddNode }) {
     return h('aside', { className: 'sidebar' }, [
       h('div', { className: 'section-header' }, 'Function catalogs'),
       h('div', { className: 'sidebar-content' }, [
@@ -899,7 +995,8 @@
         }),
         h('div', { className: 'palette' }, [
           h('div', { className: 'section-header' }, 'Node palette'),
-          h(NodePalette, null)
+          h('small', { className: 'subtitle', style: { marginBottom: '8px', display: 'block' } }, 'Haz clic en el botón + para agregar nodos'),
+          h(NodePalette, { onAddNode })
         ])
       ])
     ]);
@@ -943,25 +1040,62 @@
     );
   }
 
-  function NodePalette() {
+  function NodePalette({ onAddNode }) {
     return h(
       'div',
       null,
       NODE_TYPES.map((node) =>
-        h(
-          'div',
-          {
-            className: 'node-type',
-            key: node.id,
-            draggable: true,
-            onDragStart: (event) => {
-              event.dataTransfer.effectAllowed = 'copy';
-              event.dataTransfer.setData('application/x-node-type', node.id);
-            }
-          },
+          h(
+            'div',
+            {
+              className: 'node-type',
+              key: node.id,
+              draggable: true,
+              onClick: (event) => {
+                console.log('🔍 Click simple en nodo:', node.id);
+                if (event.detail === 2) { // Detectar doble clic
+                  console.log('📋 DOBLE CLIC detectado en nodo de paleta:', node.id);
+                  console.log('onAddNode disponible:', !!onAddNode);
+                  if (onAddNode) {
+                    // Agregar en una posición centrada y un poco aleatoria
+                    const position = {
+                      x: 200 + Math.random() * 300,
+                      y: 150 + Math.random() * 200
+                    };
+                    console.log('Agregando nodo en posición:', position);
+                    onAddNode(node.id, position);
+                  } else {
+                    console.error('onAddNode no está disponible');
+                  }
+                }
+              },
+              onDragStart: (event) => {
+                event.dataTransfer.effectAllowed = 'copy';
+                event.dataTransfer.setData('application/x-node-type', node.id);
+              }
+            },
           [
-            h('span', null, node.label),
-            h('small', { className: 'subtitle' }, node.description)
+            h('div', { className: 'node-info' }, [
+              h('span', null, node.label),
+              h('small', { className: 'subtitle' }, node.description)
+            ]),
+            h('button', {
+              className: 'add-node-btn',
+              onClick: (event) => {
+                event.stopPropagation();
+                console.log('➕ Botón + presionado para nodo:', node.id);
+                if (onAddNode) {
+                  const position = {
+                    x: 200 + Math.random() * 300,
+                    y: 150 + Math.random() * 200
+                  };
+                  console.log('Agregando nodo desde botón en posición:', position);
+                  onAddNode(node.id, position);
+                } else {
+                  console.error('onAddNode no está disponible desde botón');
+                }
+              }
+            }, '+')
           ]
         )
       )
@@ -1027,33 +1161,59 @@
       }
     }, [node, onOpenFlow]);
 
-    useEffect(() => {
-      const element = ref.current;
-      if (!element) return;
-      const handlePointerDown = (event) => {
-        event.preventDefault();
-        onSelect(node.id);
-        const startX = event.clientX;
-        const startY = event.clientY;
-        const initial = { ...node.position };
-        const move = (moveEvent) => {
-          moveEvent.preventDefault();
+    // Manejadores simples como propiedades del elemento
+    const handleClick = useCallback((event) => {
+      event.stopPropagation();
+      console.log('🖱️ CLICK SIMPLE en nodo:', node.id);
+      onSelect(node.id);
+    }, [node.id, onSelect]);
+
+    const handleMouseDown = useCallback((event) => {
+      if (event.button !== 0) return;
+      
+      console.log('🖱️ MOUSEDOWN en nodo:', node.id);
+      event.preventDefault();
+      
+      let isDragging = false;
+      const startX = event.clientX;
+      const startY = event.clientY;
+      const initialPosition = { ...node.position };
+      
+      const handleMouseMove = (moveEvent) => {
+        const deltaX = Math.abs(moveEvent.clientX - startX);
+        const deltaY = Math.abs(moveEvent.clientY - startY);
+        
+        if (!isDragging && (deltaX > 5 || deltaY > 5)) {
+          isDragging = true;
+          console.log('🚀 INICIANDO ARRASTRE del nodo:', node.id);
+          document.body.style.cursor = 'grabbing';
+        }
+        
+        if (isDragging) {
           const dx = moveEvent.clientX - startX;
           const dy = moveEvent.clientY - startY;
-          onMove(node.id, { x: initial.x + dx, y: initial.y + dy });
-        };
-        const stop = () => {
-          window.removeEventListener('pointermove', move);
-          window.removeEventListener('pointerup', stop);
-        };
-        window.addEventListener('pointermove', move);
-        window.addEventListener('pointerup', stop);
+          const newPosition = {
+            x: initialPosition.x + dx,
+            y: initialPosition.y + dy
+          };
+          console.log('📍 MOVIENDO nodo:', node.id, 'a posición:', newPosition);
+          onMove(node.id, newPosition);
+        }
       };
-      element.addEventListener('pointerdown', handlePointerDown);
-      return () => {
-        element.removeEventListener('pointerdown', handlePointerDown);
+      
+      const handleMouseUp = () => {
+        document.removeEventListener('mousemove', handleMouseMove);
+        document.removeEventListener('mouseup', handleMouseUp);
+        document.body.style.cursor = '';
+        
+        if (isDragging) {
+          console.log('🛑 FIN ARRASTRE del nodo:', node.id);
+        }
       };
-    }, [node.id, node.position.x, node.position.y, onMove, onSelect]);
+      
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+    }, [node.id, node.position, onMove]);
 
     const className = `${getNodeClass(node.type)}${selected ? ' selected' : ''}`;
 
@@ -1067,6 +1227,8 @@
           left: `${node.position.x}px`,
           top: `${node.position.y}px`
         },
+        onClick: handleClick,
+        onMouseDown: handleMouseDown,
         onDoubleClick: handleDoubleClick
       },
       [
@@ -1090,22 +1252,56 @@
   }
 
   function LinkLayer({ edges, rects }) {
-    if (!edges.length) return null;
+    console.log('🔗 LinkLayer render:', { 
+      edgesCount: edges.length, 
+      edges: edges,
+      rectsKeys: Object.keys(rects)
+    });
+    
+    if (!edges.length) {
+      console.log('❌ No hay edges para renderizar');
+      return null;
+    }
+    
     return h(
       'svg',
-      { className: 'link-canvas' },
+      { 
+        className: 'link-canvas',
+        width: '100%',
+        height: '100%',
+        style: { position: 'absolute', top: 0, left: 0, zIndex: 10 }
+      },
       edges.map((edge) => {
         const source = rects[edge.from];
         const target = rects[edge.to];
+        console.log('🎯 Procesando edge:', edge.id, { 
+          from: edge.from, 
+          to: edge.to, 
+          hasSource: !!source, 
+          hasTarget: !!target 
+        });
+        
         if (!source || !target) {
+          console.log('❌ Edge sin rects:', edge.id, { source, target });
           return null;
         }
         const startX = source.left + source.width;
         const startY = source.top + source.height / 2;
         const endX = target.left;
         const endY = target.top + target.height / 2;
-        const midX = startX + (endX - startX) * 0.5;
-        const path = `M ${startX} ${startY} C ${midX} ${startY}, ${midX} ${endY}, ${endX} ${endY}`;
+        
+        // Path simple y directo - línea recta con una pequeña curva
+        const midX = startX + (endX - startX) * 0.6;
+        const path = `M ${startX} ${startY} Q ${midX} ${startY} ${endX - 10} ${endY}`;
+        
+        console.log('🎨 DIBUJANDO flecha simple:', {
+          edge: edge.id,
+          coords: `${startX},${startY} -> ${endX},${endY}`,
+          path,
+          sourceSize: `${source.width}x${source.height}`,
+          targetSize: `${target.width}x${target.height}`
+        });
+        
         return h(
           'g',
           { key: edge.id },
@@ -1113,14 +1309,15 @@
             h('path', {
               d: path,
               fill: 'none',
-              stroke: 'rgba(148,163,184,0.35)',
-              'stroke-width': 2
+              stroke: '#38bdf8',
+              strokeWidth: 4,
+              opacity: 1
             }),
             h('circle', {
-              cx: endX,
+              cx: endX - 10,
               cy: endY,
-              r: 4,
-              fill: 'rgba(56,189,248,0.85)'
+              r: 6,
+              fill: '#38bdf8'
             }),
             edge.label
               ? h(
@@ -1147,23 +1344,33 @@
     aggregatedFunctions,
     onNavigateFlow
   }) {
-    const node = selection && currentFlow ? currentFlow.nodes[selection.nodeId] : null;
+    // SIEMPRE obtener el nodo más actualizado desde flows
+    const actualFlow = selection ? flows[selection.flowId] : currentFlow;
+    const node = selection && actualFlow ? actualFlow.nodes[selection.nodeId] : null;
+    
+    console.log('🔧 ConfigPanel render:', {
+      selectionNodeId: selection?.nodeId,
+      flowId: selection?.flowId,
+      hasActualFlow: !!actualFlow,
+      hasNode: !!node,
+      nodeTransitions: node?.transitions
+    });
     return h('aside', { className: 'config-panel' }, [
       h('div', { className: 'section-header' }, 'Configuration'),
       h(
         'div',
         { className: 'config-content' },
-        node && currentFlow
+        node && actualFlow
           ? [
-              h(FlowBreadcrumb, { flow: currentFlow, flows, onNavigate: onNavigateFlow }),
+              h(FlowBreadcrumb, { flow: actualFlow, flows, onNavigate: onNavigateFlow }),
               h(NodeGeneralSettings, {
-                flow: currentFlow,
+                flow: actualFlow,
                 node,
                 dispatch
               }),
               renderNodeEditor({
                 node,
-                flow: currentFlow,
+                flow: actualFlow,
                 dispatch,
                 aggregatedFunctions,
                 flows,
@@ -1203,19 +1410,83 @@
     return ['Task', 'Pass', 'Wait', 'Map', 'Parallel'].includes(type);
   }
 
+  function NextStateSelect({ node, nextOptions, onChange }) {
+    const [localValue, setLocalValue] = useState(node.transitions.next || '');
+    
+    // Sincronizar valor local cuando cambia el nodo
+    useEffect(() => {
+      const expectedValue = node.transitions.next || '';
+      console.log('🔄 NextStateSelect sync:', { 
+        localValue, 
+        expectedValue, 
+        nodeId: node.id 
+      });
+      setLocalValue(expectedValue);
+    }, [node.transitions.next, node.id]);
+    
+    const handleChange = (event) => {
+      const newValue = event.target.value;
+      console.log('🔄 NextStateSelect handleChange:', { from: localValue, to: newValue });
+      setLocalValue(newValue);
+      onChange(event);
+    };
+    
+    return h(
+      'select',
+      {
+        value: localValue,
+        disabled: node.transitions.end,
+        onChange: handleChange
+      },
+      [
+        h('option', { value: '' }, '— None —'),
+        ...nextOptions.map((option) =>
+          h('option', { key: option.id, value: option.id }, option.label)
+        )
+      ]
+    );
+  }
+
   function NodeGeneralSettings({ flow, node, dispatch }) {
+    const selectRef = useRef(null);
+    
+    console.log('🔧 NodeGeneralSettings render:', {
+      nodeId: node.id,
+      nodeName: node.name,
+      currentNext: node.transitions.next,
+      allTransitions: node.transitions
+    });
+    
     const nextOptions = flow.order
       .filter((id) => id !== node.id)
       .map((id) => ({ id, label: flow.nodes[id].name }));
+      
+    console.log('🔧 NextOptions disponibles:', nextOptions);
+    
+    // Forzar sincronización del select cuando cambia node.transitions.next
+    useEffect(() => {
+      if (selectRef.current) {
+        const expectedValue = node.transitions.next || '';
+        if (selectRef.current.value !== expectedValue) {
+          console.log('🔧 Sincronizando select:', selectRef.current.value, '->', expectedValue);
+          selectRef.current.value = expectedValue;
+        }
+      }
+    }, [node.transitions.next]);
 
-    const handleNameChange = (event) => {
-      dispatch({
-        type: 'UPDATE_NODE',
-        flowId: flow.id,
-        nodeId: node.id,
-        changes: { name: event.target.value }
-      });
-    };
+    const handleNameChange = useCallback((event) => {
+      const value = event.target.value;
+      // Usar timeout para evitar updates constantes que causan pérdida de foco
+      clearTimeout(handleNameChange.timeoutId);
+      handleNameChange.timeoutId = setTimeout(() => {
+        dispatch({
+          type: 'UPDATE_NODE',
+          flowId: flow.id,
+          nodeId: node.id,
+          changes: { name: value }
+        });
+      }, 300);
+    }, [dispatch, flow.id, node.id]);
 
     const handleCommentChange = (event) => {
       dispatch({
@@ -1241,11 +1512,17 @@
     };
 
     const handleNextChange = (event) => {
+      const nextValue = event.target.value || null;
+      console.log('🔄 handleNextChange:', { 
+        from: node.transitions.next, 
+        to: nextValue, 
+        nodeId: node.id 
+      });
       dispatch({
         type: 'UPDATE_NODE',
         flowId: flow.id,
         nodeId: node.id,
-        changes: { transitions: { next: event.target.value || null } }
+        changes: { transitions: { next: nextValue } }
       });
     };
 
@@ -1264,7 +1541,7 @@
         h('label', null, 'State name'),
         h('input', {
           value: node.name,
-          onInput: handleNameChange
+          onChange: handleNameChange
         })
       ]),
       h('div', { className: 'form-field' }, [
@@ -1296,20 +1573,11 @@
       supportsNextTransition(node.type)
         ? h('div', { className: 'form-field' }, [
             h('label', null, 'Next state'),
-            h(
-              'select',
-              {
-                value: node.transitions.next || '',
-                disabled: node.transitions.end,
-                onChange: handleNextChange
-              },
-              [
-                h('option', { value: '' }, '— None —'),
-                ...nextOptions.map((option) =>
-                  h('option', { key: option.id, value: option.id }, option.label)
-                )
-              ]
-            )
+            h(NextStateSelect, {
+              node,
+              nextOptions,
+              onChange: handleNextChange
+            })
           ])
         : null,
       h('div', { className: 'switch-row' }, [
@@ -2237,33 +2505,58 @@
     const [installError, setInstallError] = useState('');
     const canvasRef = useRef(null);
     const flow = state.flows[state.currentFlowId];
+    
+    // Exponer estado para debugging
+    window.debugState = state;
+    window.debugDispatch = dispatch;
 
     useCatalogs(dispatch);
     useToasts(state, dispatch);
 
     useEffect(() => {
-      const container = canvasRef.current;
-      if (!container) return;
-      const parentRect = container.getBoundingClientRect();
-      const rects = {};
-      container.querySelectorAll('[data-node-id]').forEach((element) => {
-        const id = element.getAttribute('data-node-id');
-        const bounds = element.getBoundingClientRect();
-        rects[id] = {
-          left: bounds.left - parentRect.left,
-          top: bounds.top - parentRect.top,
-          width: bounds.width,
-          height: bounds.height
-        };
-      });
-      setNodeRects(rects);
-    }, [state.currentFlowId, state.revision, flow ? flow.order.length : 0]);
+      if (!flow || !canvasRef.current) return;
+      
+      // Usar requestAnimationFrame para asegurar que el layout esté completo
+      const captureRects = () => {
+        const container = canvasRef.current;
+        if (!container) return;
+        
+        const rects = {};
+        const containerRect = container.getBoundingClientRect();
+        
+        // Buscar nodos directamente en el container
+        flow.order.forEach((nodeId) => {
+          const element = container.querySelector(`[data-node-id="${nodeId}"]`);
+          if (element) {
+            const rect = element.getBoundingClientRect();
+            rects[nodeId] = {
+              left: rect.left - containerRect.left,
+              top: rect.top - containerRect.top,
+              width: rect.width,
+              height: rect.height
+            };
+            console.log('📐 Rect capturado para', nodeId, ':', rects[nodeId]);
+          } else {
+            console.log('❌ No se encontró elemento para', nodeId);
+          }
+        });
+        
+        console.log('📐 RequestAnimationFrame: nodeRects capturados:', Object.keys(rects).length);
+        setNodeRects(rects);
+      };
+      
+      requestAnimationFrame(captureRects);
+    }, [flow, state.revision]);
 
     const edges = useMemo(() => computeEdges(flow), [flow, state.revision]);
 
     const handleDropNode = useCallback(
       (type, position) => {
-        if (!flow) return;
+        console.log('🎯 handleDropNode llamado:', { type, position, flowId: flow?.id });
+        if (!flow) {
+          console.error('No hay flow disponible');
+          return;
+        }
         dispatch({ type: 'ADD_NODE', flowId: flow.id, nodeType: type, position });
       },
       [dispatch, flow]
@@ -2271,7 +2564,11 @@
 
     const handleSelectNode = useCallback(
       (nodeId) => {
-        if (!flow) return;
+        console.log('🎯 handleSelectNode llamado:', { nodeId, flowId: flow?.id });
+        if (!flow) {
+          console.error('No hay flow disponible para seleccionar nodo');
+          return;
+        }
         dispatch({ type: 'SET_SELECTION', selection: { flowId: flow.id, nodeId } });
       },
       [dispatch, flow]
@@ -2279,7 +2576,11 @@
 
     const handleMoveNode = useCallback(
       (nodeId, position) => {
-        if (!flow) return;
+        console.log('🔄 handleMoveNode llamado:', { nodeId, position, flowId: flow?.id });
+        if (!flow) {
+          console.error('No hay flow disponible para mover nodo');
+          return;
+        }
         dispatch({ type: 'UPDATE_NODE_POSITION', flowId: flow.id, nodeId, position });
       },
       [dispatch, flow]
@@ -2435,16 +2736,19 @@
     return h('div', { className: 'app-shell' }, [
       h(AppHeader, {
         flow,
+        flows: state.flows,
         onDownload: handleDownload,
         onValidate: handleValidate,
         onOpenInstall: openInstallModal,
+        onNavigateFlow: handleNavigateFlow,
         validation: state.validation
       }),
       h('div', { className: 'app-body' }, [
         h(Sidebar, {
           catalogs: state.catalogs.items,
           onRefreshCatalog: handleRefreshCatalog,
-          onRemoveCatalog: handleRemoveCatalog
+          onRemoveCatalog: handleRemoveCatalog,
+          onAddNode: handleDropNode
         }),
         h(CanvasView, {
           flow,

@@ -36,6 +36,26 @@ class DynaflowUIServer:
         self.catalog_manager = catalog_manager or CatalogManager()
         self.static_dir = Path(__file__).resolve().parent / "static"
         self._httpd: ThreadingHTTPServer | None = None
+        self._validate_static_directory()
+
+    def _validate_static_directory(self) -> None:
+        """Validate that the static directory exists and contains required files.
+
+        Raises:
+            RuntimeError: If static directory or critical files are missing.
+        """
+        if not self.static_dir.exists():
+            raise RuntimeError(f"Static directory not found: {self.static_dir}")
+
+        required_files = ["index.html", "app.js", "styles.css"]
+        missing_files = [
+            f for f in required_files if not (self.static_dir / f).exists()
+        ]
+
+        if missing_files:
+            raise RuntimeError(f"Missing static files: {missing_files}")
+
+        LOGGER.info("Static directory validated: %s", self.static_dir)
 
     # ------------------------------------------------------------------
     def run(self) -> None:
@@ -48,10 +68,14 @@ class DynaflowUIServer:
 
         url = f"http://{self.host}:{self.port}/"
         LOGGER.info("Starting DynaFlow UI at %s", url)
+        LOGGER.info("Serving static files from: %s", self.static_dir)
         print(f"DynaFlow UI available at {url}")
+        print(f"Static files directory: {self.static_dir}")
 
         if self.open_browser:
-            threading.Thread(target=self._open_browser, args=(url,), daemon=True).start()
+            threading.Thread(
+                target=self._open_browser, args=(url,), daemon=True
+            ).start()
 
         try:
             server.serve_forever()
@@ -79,6 +103,9 @@ class DynaflowUIServer:
 
             def __init__(self, *args, **kwargs):
                 super().__init__(*args, directory=str(static_dir), **kwargs)
+                LOGGER.debug(
+                    "RequestHandler initialized with static_dir: %s", static_dir
+                )
 
             # --------------------------------------------------
             # Routing helpers
@@ -90,13 +117,30 @@ class DynaflowUIServer:
 
             def do_GET(self):  # noqa: N802 (HTTP verb naming)
                 parsed = urllib.parse.urlparse(self.path)
+                LOGGER.debug("GET request for path: %s", self.path)
+
                 if parsed.path.startswith("/api/"):
                     self._handle_api_get(parsed)
                     return
 
+                # Handle root path
                 if parsed.path in {"/", ""}:
-                    self.path = "index.html"
-                super().do_GET()
+                    LOGGER.debug("Root path requested, redirecting to index.html")
+                    self.path = "/index.html"
+
+                # Log the final path and static directory
+                LOGGER.debug(
+                    "Serving static file: %s from directory: %s", self.path, static_dir
+                )
+
+                # Ensure static files are served with proper error handling
+                try:
+                    super().do_GET()
+                except Exception as exc:
+                    LOGGER.error("Error serving static file %s: %s", self.path, exc)
+                    self.send_error(
+                        HTTPStatus.NOT_FOUND, f"File not found: {self.path}"
+                    )
 
             def do_POST(self):  # noqa: N802 (HTTP verb naming)
                 parsed = urllib.parse.urlparse(self.path)
@@ -200,7 +244,9 @@ class DynaflowUIServer:
                     self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
                     return
                 except RuntimeError as exc:
-                    self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
+                    self._send_json(
+                        HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)}
+                    )
                     return
 
                 self._send_json(
@@ -220,7 +266,9 @@ class DynaflowUIServer:
                 valid, errors = validate_flow(flow, return_errors=True)
                 response = {
                     "valid": bool(valid),
-                    "errors": [self._format_validation_error(error) for error in errors],
+                    "errors": [
+                        self._format_validation_error(error) for error in errors
+                    ],
                 }
                 status = HTTPStatus.OK if valid else HTTPStatus.UNPROCESSABLE_ENTITY
                 self._send_json(status, response)
@@ -256,7 +304,9 @@ class DynaflowUIServer:
                     "Access-Control-Allow-Headers",
                     "Content-Type, Authorization, X-Requested-With",
                 )
-                self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+                self.send_header(
+                    "Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS"
+                )
 
             def _extract_alias(self, path: str, suffix: str = "") -> str | None:
                 trimmed = path[len("/api/catalogs/") :]
@@ -277,11 +327,12 @@ class DynaflowUIServer:
                     "validator": validator,
                 }
 
-            def log_message(self, format: str, *args: Any) -> None:  # noqa: A003 - part of stdlib API
+            def log_message(
+                self, format: str, *args: Any
+            ) -> None:  # noqa: A003 - part of stdlib API
                 LOGGER.debug("%s - %s", self.address_string(), format % args)
 
         return RequestHandler
 
 
 __all__ = ["DynaflowUIServer"]
-
