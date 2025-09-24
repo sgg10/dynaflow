@@ -1452,6 +1452,76 @@
       };
     };
 
+    const SIDE_VECTORS = {
+      left: { x: -1, y: 0 },
+      right: { x: 1, y: 0 },
+      top: { x: 0, y: -1 },
+      bottom: { x: 0, y: 1 }
+    };
+
+    const getAnchor = (rect, side) => {
+      switch (side) {
+        case 'left':
+          return { x: rect.left, y: rect.top + rect.height / 2 };
+        case 'right':
+          return { x: rect.left + rect.width, y: rect.top + rect.height / 2 };
+        case 'top':
+          return { x: rect.left + rect.width / 2, y: rect.top };
+        case 'bottom':
+          return { x: rect.left + rect.width / 2, y: rect.top + rect.height };
+        default:
+          return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      }
+    };
+
+    const offsetPoint = (point, side, distance) => {
+      if (!distance) {
+        return point;
+      }
+      const vector = SIDE_VECTORS[side] || { x: 0, y: 0 };
+      return {
+        x: point.x + vector.x * distance,
+        y: point.y + vector.y * distance
+      };
+    };
+
+    const pickConnection = (sourceRect, targetRect) => {
+      const sourceCenter = {
+        x: sourceRect.left + sourceRect.width / 2,
+        y: sourceRect.top + sourceRect.height / 2
+      };
+      const targetCenter = {
+        x: targetRect.left + targetRect.width / 2,
+        y: targetRect.top + targetRect.height / 2
+      };
+      const dx = targetCenter.x - sourceCenter.x;
+      const dy = targetCenter.y - sourceCenter.y;
+
+      if (Math.abs(dx) > Math.abs(dy)) {
+        return {
+          sourceSide: dx >= 0 ? 'right' : 'left',
+          targetSide: dx >= 0 ? 'left' : 'right',
+          orientation: 'horizontal'
+        };
+      }
+
+      return {
+        sourceSide: dy >= 0 ? 'bottom' : 'top',
+        targetSide: dy >= 0 ? 'top' : 'bottom',
+        orientation: 'vertical'
+      };
+    };
+
+    const cubicPoint = (p0, p1, p2, p3, t) => {
+      const mt = 1 - t;
+      return (
+        mt * mt * mt * p0 +
+        3 * mt * mt * t * p1 +
+        3 * mt * t * t * p2 +
+        t * t * t * p3
+      );
+    };
+
     return h(
       'svg',
       {
@@ -1477,37 +1547,102 @@
           return null;
         }
 
-        const sourceX = source.left + source.width;
-        const sourceY = source.top + source.height / 2;
-        const targetX = target.left;
-        const targetY = target.top + target.height / 2;
+        const { sourceSide, targetSide, orientation } = pickConnection(source, target);
+        const sourceAnchor = getAnchor(source, sourceSide);
+        const targetAnchor = getAnchor(target, targetSide);
+        const baseDx = targetAnchor.x - sourceAnchor.x;
+        const baseDy = targetAnchor.y - sourceAnchor.y;
+        const baseDistance = Math.hypot(baseDx, baseDy);
+        const startOffset = Math.min(
+          16,
+          Math.min(baseDistance * 0.5, Math.max(baseDistance * 0.3, 4))
+        );
+        const startPoint = offsetPoint(sourceAnchor, sourceSide, startOffset);
 
-        const direction = targetX >= sourceX ? 1 : -1;
-        const deltaX = Math.abs(targetX - sourceX);
-        const curve = Math.min(Math.max(deltaX * 0.5, 48), 240);
-        const control1X = sourceX + curve * direction;
-        const control2X = targetX - curve * direction;
-        const control1Y = sourceY;
-        const control2Y = targetY;
+        let arrowVec = {
+          x: targetAnchor.x - startPoint.x,
+          y: targetAnchor.y - startPoint.y
+        };
+        let arrowLength = Math.hypot(arrowVec.x, arrowVec.y);
+        if (!arrowLength || !Number.isFinite(arrowLength)) {
+          const fallback = SIDE_VECTORS[targetSide] || { x: 1, y: 0 };
+          arrowVec = { x: -fallback.x, y: -fallback.y };
+          arrowLength = Math.hypot(arrowVec.x, arrowVec.y);
+        }
+        const safeArrowLength = arrowLength || 1;
+        let directionVector = {
+          x: arrowVec.x / safeArrowLength,
+          y: arrowVec.y / safeArrowLength
+        };
+        if (!Number.isFinite(directionVector.x) || !Number.isFinite(directionVector.y)) {
+          const fallbackVector = SIDE_VECTORS[sourceSide] || { x: 1, y: 0 };
+          const fallbackLength = Math.hypot(fallbackVector.x, fallbackVector.y) || 1;
+          directionVector = {
+            x: fallbackVector.x / fallbackLength,
+            y: fallbackVector.y / fallbackLength
+          };
+        }
 
-        const dx = targetX - sourceX;
-        const dy = targetY - sourceY;
-        const angle = Math.atan2(dy, dx === 0 ? direction * 0.0001 : dx);
-        const arrowTipX = targetX - direction * 6;
-        const arrowTipY = targetY;
-        const lineEndX = arrowTipX - Math.cos(angle) * 8;
-        const lineEndY = arrowTipY - Math.sin(angle) * 8;
-        const path = `M ${sourceX} ${sourceY} C ${control1X} ${control1Y} ${control2X} ${control2Y} ${lineEndX} ${lineEndY}`;
+        let headLength = Math.min(12, Math.max(4, safeArrowLength * 0.25));
+        if (headLength > safeArrowLength - 2) {
+          headLength = Math.max(safeArrowLength * 0.5, safeArrowLength - 2);
+        }
+        if (headLength <= 0) {
+          headLength = safeArrowLength * 0.5;
+        }
 
-        const headLength = 10;
+        const lineEnd = {
+          x: targetAnchor.x - directionVector.x * headLength,
+          y: targetAnchor.y - directionVector.y * headLength
+        };
+
+        const pathDistance = Math.hypot(lineEnd.x - startPoint.x, lineEnd.y - startPoint.y);
+        const dynamicMin = pathDistance < 80 ? Math.max(pathDistance * 0.45, 8) : 40;
+        const baseCurve = pathDistance * 0.5;
+        const curve = Math.min(220, Math.max(dynamicMin, baseCurve));
+        const startVector = SIDE_VECTORS[sourceSide] || { x: 0, y: 0 };
+
+        let control1;
+        let control2;
+
+        if (orientation === 'horizontal') {
+          const deltaY = lineEnd.y - startPoint.y;
+          control1 = {
+            x: startPoint.x + startVector.x * curve,
+            y: startPoint.y + deltaY * 0.25
+          };
+          control2 = {
+            x: lineEnd.x - directionVector.x * curve,
+            y: lineEnd.y - deltaY * 0.25
+          };
+        } else {
+          const deltaX = lineEnd.x - startPoint.x;
+          control1 = {
+            x: startPoint.x + deltaX * 0.25,
+            y: startPoint.y + startVector.y * curve
+          };
+          control2 = {
+            x: lineEnd.x - deltaX * 0.25,
+            y: lineEnd.y - directionVector.y * curve
+          };
+        }
+
+        const path = [
+          `M ${startPoint.x} ${startPoint.y}`,
+          `C ${control1.x} ${control1.y} ${control2.x} ${control2.y} ${lineEnd.x} ${lineEnd.y}`
+        ].join(' ');
+
+        const arrowTipX = targetAnchor.x;
+        const arrowTipY = targetAnchor.y;
+        const angle = Math.atan2(arrowTipY - lineEnd.y, arrowTipX - lineEnd.x);
         const leftX = arrowTipX - headLength * Math.cos(angle - Math.PI / 6);
         const leftY = arrowTipY - headLength * Math.sin(angle - Math.PI / 6);
         const rightX = arrowTipX - headLength * Math.cos(angle + Math.PI / 6);
         const rightY = arrowTipY - headLength * Math.sin(angle + Math.PI / 6);
         const arrowHead = `M ${arrowTipX} ${arrowTipY} L ${leftX} ${leftY} L ${rightX} ${rightY} Z`;
 
-        const labelX = sourceX + (targetX - sourceX) * 0.5;
-        const labelY = sourceY + (targetY - sourceY) * 0.5 - 8;
+        const labelX = cubicPoint(startPoint.x, control1.x, control2.x, lineEnd.x, 0.5);
+        const labelY = cubicPoint(startPoint.y, control1.y, control2.y, lineEnd.y, 0.5) - 8;
 
         return h(
           'g',
