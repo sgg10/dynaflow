@@ -168,6 +168,19 @@
       dom.addEventListener(eventName, value);
       return;
     }
+    if (name === "value" && "value" in dom) {
+      if (value === false || value === null || value === undefined) {
+        dom.value = "";
+        dom.removeAttribute("value");
+      } else {
+        dom.value = value;
+      }
+      return;
+    }
+    if (name === "checked" && "checked" in dom) {
+      dom.checked = Boolean(value);
+      return;
+    }
     if (value === false || value === null || value === undefined) {
       dom.removeAttribute(name);
       return;
