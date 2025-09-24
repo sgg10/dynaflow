@@ -1458,6 +1458,7 @@
       top: { x: 0, y: -1 },
       bottom: { x: 0, y: 1 }
     };
+    const SIDE_ORDER = ['right', 'left', 'bottom', 'top'];
 
     const getAnchor = (rect, side) => {
       switch (side) {
@@ -1494,21 +1495,82 @@
         x: targetRect.left + targetRect.width / 2,
         y: targetRect.top + targetRect.height / 2
       };
-      const dx = targetCenter.x - sourceCenter.x;
-      const dy = targetCenter.y - sourceCenter.y;
 
-      if (Math.abs(dx) > Math.abs(dy)) {
+      const vectorToTarget = {
+        x: targetCenter.x - sourceCenter.x,
+        y: targetCenter.y - sourceCenter.y
+      };
+      const vectorToSource = {
+        x: sourceCenter.x - targetCenter.x,
+        y: sourceCenter.y - targetCenter.y
+      };
+
+      const scoreSides = (vector) =>
+        SIDE_ORDER.map((side) => ({
+          side,
+          score:
+            (vector.x || 0) * (SIDE_VECTORS[side].x || 0) +
+            (vector.y || 0) * (SIDE_VECTORS[side].y || 0)
+        })).sort((a, b) => b.score - a.score);
+
+      const sourceRanking = scoreSides(vectorToTarget);
+      const targetRanking = scoreSides(vectorToSource);
+
+      let best = null;
+
+      const limitSource = Math.min(3, sourceRanking.length);
+      const limitTarget = Math.min(3, targetRanking.length);
+
+      for (let i = 0; i < limitSource; i += 1) {
+        for (let j = 0; j < limitTarget; j += 1) {
+          const sourceSide = sourceRanking[i].side;
+          const targetSide = targetRanking[j].side;
+          const sourceAnchor = getAnchor(sourceRect, sourceSide);
+          const targetAnchor = getAnchor(targetRect, targetSide);
+          const vec = {
+            x: targetAnchor.x - sourceAnchor.x,
+            y: targetAnchor.y - sourceAnchor.y
+          };
+          const length = Math.hypot(vec.x, vec.y) || 1;
+          const sourceNormal = SIDE_VECTORS[sourceSide] || { x: 0, y: 0 };
+          const targetNormal = SIDE_VECTORS[targetSide] || { x: 0, y: 0 };
+          const sourceDot = vec.x * sourceNormal.x + vec.y * sourceNormal.y;
+          const targetDot = vec.x * targetNormal.x + vec.y * targetNormal.y;
+          const sourceAlignment = Math.max(0, Math.min(1, sourceDot / length));
+          const targetAlignment = Math.max(0, Math.min(1, -targetDot / length));
+
+          let penalty = 0;
+          if (sourceDot <= 0) {
+            penalty += Math.abs(sourceDot) * 600;
+          }
+          if (targetDot >= 0) {
+            penalty += Math.abs(targetDot) * 600;
+          }
+          penalty += (1 - sourceAlignment) * 160;
+          penalty += (1 - targetAlignment) * 160;
+
+          const cost = length + penalty;
+
+          if (!best || cost < best.cost) {
+            best = {
+              sourceSide,
+              targetSide,
+              cost
+            };
+          }
+        }
+      }
+
+      if (!best) {
         return {
-          sourceSide: dx >= 0 ? 'right' : 'left',
-          targetSide: dx >= 0 ? 'left' : 'right',
-          orientation: 'horizontal'
+          sourceSide: (sourceRanking[0] && sourceRanking[0].side) || 'right',
+          targetSide: (targetRanking[0] && targetRanking[0].side) || 'left'
         };
       }
 
       return {
-        sourceSide: dy >= 0 ? 'bottom' : 'top',
-        targetSide: dy >= 0 ? 'top' : 'bottom',
-        orientation: 'vertical'
+        sourceSide: best.sourceSide,
+        targetSide: best.targetSide
       };
     };
 
@@ -1547,14 +1609,15 @@
           return null;
         }
 
-        const { sourceSide, targetSide, orientation } = pickConnection(source, target);
+        const { sourceSide, targetSide } = pickConnection(source, target);
         const sourceAnchor = getAnchor(source, sourceSide);
         const targetAnchor = getAnchor(target, targetSide);
         const startPoint = sourceAnchor;
+        const arrowTip = offsetPoint(targetAnchor, targetSide, -0.75);
 
         let arrowVec = {
-          x: targetAnchor.x - startPoint.x,
-          y: targetAnchor.y - startPoint.y
+          x: arrowTip.x - startPoint.x,
+          y: arrowTip.y - startPoint.y
         };
         let arrowLength = Math.hypot(arrowVec.x, arrowVec.y);
         if (!arrowLength || !Number.isFinite(arrowLength)) {
@@ -1585,8 +1648,8 @@
         }
 
         const lineEnd = {
-          x: targetAnchor.x - directionVector.x * headLength,
-          y: targetAnchor.y - directionVector.y * headLength
+          x: arrowTip.x - directionVector.x * headLength,
+          y: arrowTip.y - directionVector.y * headLength
         };
 
         const pathDistance = Math.hypot(lineEnd.x - startPoint.x, lineEnd.y - startPoint.y);
@@ -1594,6 +1657,11 @@
         const baseCurve = pathDistance * 0.5;
         const curve = Math.min(220, Math.max(dynamicMin, baseCurve));
         const startVector = SIDE_VECTORS[sourceSide] || { x: 0, y: 0 };
+
+        const orientation =
+          Math.abs(lineEnd.x - startPoint.x) >= Math.abs(lineEnd.y - startPoint.y)
+            ? 'horizontal'
+            : 'vertical';
 
         let control1;
         let control2;
@@ -1625,8 +1693,8 @@
           `C ${control1.x} ${control1.y} ${control2.x} ${control2.y} ${lineEnd.x} ${lineEnd.y}`
         ].join(' ');
 
-        const arrowTipX = targetAnchor.x;
-        const arrowTipY = targetAnchor.y;
+        const arrowTipX = arrowTip.x;
+        const arrowTipY = arrowTip.y;
         const angle = Math.atan2(arrowTipY - lineEnd.y, arrowTipX - lineEnd.x);
         const leftX = arrowTipX - headLength * Math.cos(angle - Math.PI / 6);
         const leftY = arrowTipY - headLength * Math.sin(angle - Math.PI / 6);
