@@ -23,15 +23,29 @@
   ];
 
   const CHOICE_OPERATORS = [
-    "StringEquals",
-    "StringMatches",
+    "BooleanEquals",
+    "IsBoolean",
+    "IsElementPresent",
+    "IsNull",
+    "IsNumeric",
+    "IsString",
+    "IsTimestamp",
     "NumericEquals",
     "NumericGreaterThan",
+    "NumericGreaterThanEquals",
     "NumericLessThan",
-    "BooleanEquals",
+    "NumericLessThanEquals",
+    "StringEquals",
+    "StringGreaterThan",
+    "StringGreaterThanEquals",
+    "StringLessThan",
+    "StringLessThanEquals",
+    "StringMatches",
     "TimestampEquals",
+    "TimestampGreaterThan",
+    "TimestampGreaterThanEquals",
     "TimestampLessThan",
-    "TimestampGreaterThan"
+    "TimestampLessThanEquals"
   ];
 
   const WAIT_MODES = [
@@ -40,6 +54,9 @@
     { id: "secondsPath", label: "Seconds Path" },
     { id: "timestampPath", label: "Timestamp Path" }
   ];
+
+  const DEFAULT_NODE_WIDTH = 220;
+  const DEFAULT_NODE_HEIGHT = 110;
 
   const NODE_NAME_PREFIX = {
     Task: "Task",
@@ -1111,16 +1128,37 @@
     onDropNode,
     onSelectNode,
     onMoveNode,
-    onOpenFlow
+    onOpenFlow,
+    onMeasureNode,
+    pan,
+    onPanChange
   }) {
+    const panStateRef = useRef(pan);
+    const dragStartRef = useRef({ x: 0, y: 0 });
+    const pointerStartRef = useRef({ x: 0, y: 0 });
+    const [isPanning, setIsPanning] = useState(false);
+
+    useEffect(() => {
+      panStateRef.current = pan;
+    }, [pan]);
+
+    const attachCanvasRef = useCallback(
+      (element) => {
+        if (canvasRef) {
+          canvasRef.current = element;
+        }
+      },
+      [canvasRef]
+    );
+
     const handleDrop = (event) => {
       event.preventDefault();
       const nodeType = event.dataTransfer.getData('application/x-node-type');
-      if (!nodeType || !flow) return;
+      if (!nodeType || !flow || !canvasRef || !canvasRef.current) return;
       const rect = canvasRef.current.getBoundingClientRect();
       const position = {
-        x: event.clientX - rect.left - 100,
-        y: event.clientY - rect.top - 40
+        x: event.clientX - rect.left - pan.x - 100,
+        y: event.clientY - rect.top - pan.y - 40
       };
       onDropNode(nodeType, position);
     };
@@ -1130,11 +1168,75 @@
       event.dataTransfer.dropEffect = 'copy';
     };
 
-    return h('div', { className: 'canvas', onDrop: handleDrop, onDragOver: handleDragOver }, [
-      h(LinkLayer, { edges, rects: nodeRects }),
-      h(
-        'div',
-        { className: 'canvas-inner', ref: canvasRef },
+    const handleBackgroundMouseDown = useCallback(
+      (event) => {
+        if (!canvasRef || !canvasRef.current) return;
+        if (event.button !== 0) return;
+        if (event.target !== canvasRef.current) return;
+
+        event.preventDefault();
+        pointerStartRef.current = { x: event.clientX, y: event.clientY };
+        dragStartRef.current = { ...panStateRef.current };
+        setIsPanning(true);
+        document.body.style.cursor = 'grabbing';
+
+        const handleMouseMove = (moveEvent) => {
+          const dx = moveEvent.clientX - pointerStartRef.current.x;
+          const dy = moveEvent.clientY - pointerStartRef.current.y;
+          onPanChange({
+            x: dragStartRef.current.x + dx,
+            y: dragStartRef.current.y + dy
+          });
+        };
+
+        const handleMouseUp = () => {
+          document.removeEventListener('mousemove', handleMouseMove);
+          document.removeEventListener('mouseup', handleMouseUp);
+          document.body.style.cursor = '';
+          setIsPanning(false);
+        };
+
+        document.addEventListener('mousemove', handleMouseMove);
+        document.addEventListener('mouseup', handleMouseUp);
+      },
+      [canvasRef, onPanChange]
+    );
+
+    const handleWheel = useCallback(
+      (event) => {
+        if (event.ctrlKey) {
+          return;
+        }
+        event.preventDefault();
+        const nextPan = {
+          x: panStateRef.current.x - event.deltaX,
+          y: panStateRef.current.y - event.deltaY
+        };
+        onPanChange(nextPan);
+      },
+      [onPanChange]
+    );
+
+    return h(
+      'div',
+      {
+        className: 'canvas',
+        onDrop: handleDrop,
+        onDragOver: handleDragOver,
+        onWheel: handleWheel
+      },
+      [
+        h(LinkLayer, { edges, rects: nodeRects, nodes: flow ? flow.nodes : {}, pan }),
+        h(
+          'div',
+          {
+            className: `canvas-inner${isPanning ? ' is-panning' : ''}`,
+            ref: attachCanvasRef,
+            onMouseDown: handleBackgroundMouseDown,
+            style: {
+              transform: `translate(${pan.x}px, ${pan.y}px)`
+            }
+          },
         flow && flow.order.length
           ? flow.order.map((nodeId) => {
               const node = flow.nodes[nodeId];
@@ -1144,7 +1246,10 @@
                 selected: selection && selection.nodeId === node.id,
                 onSelect: onSelectNode,
                 onMove: onMoveNode,
-                onOpenFlow
+                onOpenFlow,
+                onMeasure: onMeasureNode,
+                isStart: flow.startNodeId === node.id,
+                isEnd: Boolean(node.transitions.end)
               });
             })
           : h('div', { className: 'empty-state' }, 'Drag a node from the palette to begin designing your flow.')
@@ -1152,7 +1257,16 @@
     ]);
   }
 
-  function NodeCard({ node, selected, onSelect, onMove, onOpenFlow }) {
+  function NodeCard({
+    node,
+    selected,
+    onSelect,
+    onMove,
+    onOpenFlow,
+    onMeasure,
+    isStart,
+    isEnd
+  }) {
     const ref = useRef(null);
 
     const handleDoubleClick = useCallback(() => {
@@ -1170,7 +1284,7 @@
 
     const handleMouseDown = useCallback((event) => {
       if (event.button !== 0) return;
-      
+
       console.log('🖱️ MOUSEDOWN en nodo:', node.id);
       event.preventDefault();
       
@@ -1210,10 +1324,73 @@
           console.log('🛑 FIN ARRASTRE del nodo:', node.id);
         }
       };
-      
+
       document.addEventListener('mousemove', handleMouseMove);
       document.addEventListener('mouseup', handleMouseUp);
     }, [node.id, node.position, onMove]);
+
+    useEffect(() => {
+      if (!ref.current || !onMeasure) {
+        return;
+      }
+
+      const element = ref.current;
+      let frame = null;
+
+      const updateRect = () => {
+        if (!element) {
+          return;
+        }
+        onMeasure(node.id, {
+          left: node.position.x,
+          top: node.position.y,
+          width: element.offsetWidth,
+          height: element.offsetHeight
+        });
+      };
+
+      frame = requestAnimationFrame(updateRect);
+
+      let resizeObserver = null;
+      if (typeof ResizeObserver === 'function') {
+        resizeObserver = new ResizeObserver(() => {
+          if (frame) {
+            cancelAnimationFrame(frame);
+          }
+          frame = requestAnimationFrame(updateRect);
+        });
+        resizeObserver.observe(element);
+      }
+
+      return () => {
+        if (frame) {
+          cancelAnimationFrame(frame);
+        }
+        if (resizeObserver) {
+          resizeObserver.disconnect();
+        }
+      };
+    }, [
+      node.id,
+      node.position.x,
+      node.position.y,
+      node.name,
+      node.comment,
+      node.type,
+      node.transitions.end,
+      node.branchFlowIds && node.branchFlowIds.length,
+      onMeasure
+    ]);
+
+    useEffect(() => {
+      if (!onMeasure) {
+        return () => {};
+      }
+      const nodeId = node.id;
+      return () => {
+        onMeasure(nodeId, null);
+      };
+    }, [node.id, onMeasure]);
 
     const className = `${getNodeClass(node.type)}${selected ? ' selected' : ''}`;
 
@@ -1232,6 +1409,8 @@
         onDoubleClick: handleDoubleClick
       },
       [
+        isStart ? h('span', { className: 'node-marker node-marker-start', title: 'Start state' }) : null,
+        isEnd ? h('span', { className: 'node-marker node-marker-end', title: 'End state' }) : null,
         h('div', { className: 'title' }, [
           h('strong', null, node.name),
           h('span', { className: 'tag' }, node.type)
@@ -1251,80 +1430,305 @@
     );
   }
 
-  function LinkLayer({ edges, rects }) {
-    console.log('🔗 LinkLayer render:', { 
-      edgesCount: edges.length, 
-      edges: edges,
-      rectsKeys: Object.keys(rects)
-    });
-    
+  function LinkLayer({ edges, rects, nodes, pan }) {
     if (!edges.length) {
-      console.log('❌ No hay edges para renderizar');
       return null;
     }
-    
+
+    const resolveRect = (id) => {
+      if (rects && rects[id]) {
+        return rects[id];
+      }
+      const node = nodes && nodes[id];
+      if (!node) {
+        return null;
+      }
+      const position = node.position || { x: 0, y: 0 };
+      return {
+        left: position.x,
+        top: position.y,
+        width: DEFAULT_NODE_WIDTH,
+        height: DEFAULT_NODE_HEIGHT
+      };
+    };
+
+    const SIDE_VECTORS = {
+      left: { x: -1, y: 0 },
+      right: { x: 1, y: 0 },
+      top: { x: 0, y: -1 },
+      bottom: { x: 0, y: 1 }
+    };
+    const SIDE_ORDER = ['right', 'left', 'bottom', 'top'];
+
+    const getAnchor = (rect, side) => {
+      switch (side) {
+        case 'left':
+          return { x: rect.left, y: rect.top + rect.height / 2 };
+        case 'right':
+          return { x: rect.left + rect.width, y: rect.top + rect.height / 2 };
+        case 'top':
+          return { x: rect.left + rect.width / 2, y: rect.top };
+        case 'bottom':
+          return { x: rect.left + rect.width / 2, y: rect.top + rect.height };
+        default:
+          return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      }
+    };
+
+    const offsetPoint = (point, side, distance) => {
+      if (!distance) {
+        return point;
+      }
+      const vector = SIDE_VECTORS[side] || { x: 0, y: 0 };
+      return {
+        x: point.x + vector.x * distance,
+        y: point.y + vector.y * distance
+      };
+    };
+
+    const pickConnection = (sourceRect, targetRect) => {
+      const sourceCenter = {
+        x: sourceRect.left + sourceRect.width / 2,
+        y: sourceRect.top + sourceRect.height / 2
+      };
+      const targetCenter = {
+        x: targetRect.left + targetRect.width / 2,
+        y: targetRect.top + targetRect.height / 2
+      };
+
+      const vectorToTarget = {
+        x: targetCenter.x - sourceCenter.x,
+        y: targetCenter.y - sourceCenter.y
+      };
+      const vectorToSource = {
+        x: sourceCenter.x - targetCenter.x,
+        y: sourceCenter.y - targetCenter.y
+      };
+
+      const scoreSides = (vector) =>
+        SIDE_ORDER.map((side) => ({
+          side,
+          score:
+            (vector.x || 0) * (SIDE_VECTORS[side].x || 0) +
+            (vector.y || 0) * (SIDE_VECTORS[side].y || 0)
+        })).sort((a, b) => b.score - a.score);
+
+      const sourceRanking = scoreSides(vectorToTarget);
+      const targetRanking = scoreSides(vectorToSource);
+
+      let best = null;
+
+      const limitSource = Math.min(3, sourceRanking.length);
+      const limitTarget = Math.min(3, targetRanking.length);
+
+      for (let i = 0; i < limitSource; i += 1) {
+        for (let j = 0; j < limitTarget; j += 1) {
+          const sourceSide = sourceRanking[i].side;
+          const targetSide = targetRanking[j].side;
+          const sourceAnchor = getAnchor(sourceRect, sourceSide);
+          const targetAnchor = getAnchor(targetRect, targetSide);
+          const vec = {
+            x: targetAnchor.x - sourceAnchor.x,
+            y: targetAnchor.y - sourceAnchor.y
+          };
+          const length = Math.hypot(vec.x, vec.y) || 1;
+          const sourceNormal = SIDE_VECTORS[sourceSide] || { x: 0, y: 0 };
+          const targetNormal = SIDE_VECTORS[targetSide] || { x: 0, y: 0 };
+          const sourceDot = vec.x * sourceNormal.x + vec.y * sourceNormal.y;
+          const targetDot = vec.x * targetNormal.x + vec.y * targetNormal.y;
+          const sourceAlignment = Math.max(0, Math.min(1, sourceDot / length));
+          const targetAlignment = Math.max(0, Math.min(1, -targetDot / length));
+
+          let penalty = 0;
+          if (sourceDot <= 0) {
+            penalty += Math.abs(sourceDot) * 600;
+          }
+          if (targetDot >= 0) {
+            penalty += Math.abs(targetDot) * 600;
+          }
+          penalty += (1 - sourceAlignment) * 160;
+          penalty += (1 - targetAlignment) * 160;
+
+          const cost = length + penalty;
+
+          if (!best || cost < best.cost) {
+            best = {
+              sourceSide,
+              targetSide,
+              cost
+            };
+          }
+        }
+      }
+
+      if (!best) {
+        return {
+          sourceSide: (sourceRanking[0] && sourceRanking[0].side) || 'right',
+          targetSide: (targetRanking[0] && targetRanking[0].side) || 'left'
+        };
+      }
+
+      return {
+        sourceSide: best.sourceSide,
+        targetSide: best.targetSide
+      };
+    };
+
+    const cubicPoint = (p0, p1, p2, p3, t) => {
+      const mt = 1 - t;
+      return (
+        mt * mt * mt * p0 +
+        3 * mt * mt * t * p1 +
+        3 * mt * t * t * p2 +
+        t * t * t * p3
+      );
+    };
+
     return h(
       'svg',
-      { 
+      {
         className: 'link-canvas',
         width: '100%',
         height: '100%',
-        style: { position: 'absolute', top: 0, left: 0, zIndex: 10 }
+        style: {
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          transform: `translate(${pan.x}px, ${pan.y}px)`
+        }
       },
       edges.map((edge) => {
-        const source = rects[edge.from];
-        const target = rects[edge.to];
-        console.log('🎯 Procesando edge:', edge.id, { 
-          from: edge.from, 
-          to: edge.to, 
-          hasSource: !!source, 
-          hasTarget: !!target 
-        });
-        
-        if (!source || !target) {
-          console.log('❌ Edge sin rects:', edge.id, { source, target });
+        if (!edge || edge.from === edge.to) {
           return null;
         }
-        const startX = source.left + source.width;
-        const startY = source.top + source.height / 2;
-        const endX = target.left;
-        const endY = target.top + target.height / 2;
-        
-        // Path simple y directo - línea recta con una pequeña curva
-        const midX = startX + (endX - startX) * 0.6;
-        const path = `M ${startX} ${startY} Q ${midX} ${startY} ${endX - 10} ${endY}`;
-        
-        console.log('🎨 DIBUJANDO flecha simple:', {
-          edge: edge.id,
-          coords: `${startX},${startY} -> ${endX},${endY}`,
-          path,
-          sourceSize: `${source.width}x${source.height}`,
-          targetSize: `${target.width}x${target.height}`
-        });
-        
+
+        const source = resolveRect(edge.from);
+        const target = resolveRect(edge.to);
+
+        if (!source || !target) {
+          return null;
+        }
+
+        const { sourceSide, targetSide } = pickConnection(source, target);
+        const sourceAnchor = getAnchor(source, sourceSide);
+        const targetAnchor = getAnchor(target, targetSide);
+        const startPoint = sourceAnchor;
+        const arrowTip = offsetPoint(targetAnchor, targetSide, -0.75);
+
+        let arrowVec = {
+          x: arrowTip.x - startPoint.x,
+          y: arrowTip.y - startPoint.y
+        };
+        let arrowLength = Math.hypot(arrowVec.x, arrowVec.y);
+        if (!arrowLength || !Number.isFinite(arrowLength)) {
+          const fallback = SIDE_VECTORS[targetSide] || { x: 1, y: 0 };
+          arrowVec = { x: -fallback.x, y: -fallback.y };
+          arrowLength = Math.hypot(arrowVec.x, arrowVec.y);
+        }
+        const safeArrowLength = arrowLength || 1;
+        let directionVector = {
+          x: arrowVec.x / safeArrowLength,
+          y: arrowVec.y / safeArrowLength
+        };
+        if (!Number.isFinite(directionVector.x) || !Number.isFinite(directionVector.y)) {
+          const fallbackVector = SIDE_VECTORS[sourceSide] || { x: 1, y: 0 };
+          const fallbackLength = Math.hypot(fallbackVector.x, fallbackVector.y) || 1;
+          directionVector = {
+            x: fallbackVector.x / fallbackLength,
+            y: fallbackVector.y / fallbackLength
+          };
+        }
+
+        let headLength = Math.min(12, Math.max(4, safeArrowLength * 0.25));
+        if (headLength > safeArrowLength - 2) {
+          headLength = Math.max(safeArrowLength * 0.5, safeArrowLength - 2);
+        }
+        if (headLength <= 0) {
+          headLength = safeArrowLength * 0.5;
+        }
+
+        const lineEnd = {
+          x: arrowTip.x - directionVector.x * headLength,
+          y: arrowTip.y - directionVector.y * headLength
+        };
+
+        const pathDistance = Math.hypot(lineEnd.x - startPoint.x, lineEnd.y - startPoint.y);
+        const dynamicMin = pathDistance < 80 ? Math.max(pathDistance * 0.45, 8) : 40;
+        const baseCurve = pathDistance * 0.5;
+        const curve = Math.min(220, Math.max(dynamicMin, baseCurve));
+        const startVector = SIDE_VECTORS[sourceSide] || { x: 0, y: 0 };
+
+        const orientation =
+          Math.abs(lineEnd.x - startPoint.x) >= Math.abs(lineEnd.y - startPoint.y)
+            ? 'horizontal'
+            : 'vertical';
+
+        let control1;
+        let control2;
+
+        if (orientation === 'horizontal') {
+          const deltaY = lineEnd.y - startPoint.y;
+          control1 = {
+            x: startPoint.x + startVector.x * curve,
+            y: startPoint.y + deltaY * 0.25
+          };
+          control2 = {
+            x: lineEnd.x - directionVector.x * curve,
+            y: lineEnd.y - deltaY * 0.25
+          };
+        } else {
+          const deltaX = lineEnd.x - startPoint.x;
+          control1 = {
+            x: startPoint.x + deltaX * 0.25,
+            y: startPoint.y + startVector.y * curve
+          };
+          control2 = {
+            x: lineEnd.x - deltaX * 0.25,
+            y: lineEnd.y - directionVector.y * curve
+          };
+        }
+
+        const path = [
+          `M ${startPoint.x} ${startPoint.y}`,
+          `C ${control1.x} ${control1.y} ${control2.x} ${control2.y} ${lineEnd.x} ${lineEnd.y}`
+        ].join(' ');
+
+        const arrowTipX = arrowTip.x;
+        const arrowTipY = arrowTip.y;
+        const angle = Math.atan2(arrowTipY - lineEnd.y, arrowTipX - lineEnd.x);
+        const leftX = arrowTipX - headLength * Math.cos(angle - Math.PI / 6);
+        const leftY = arrowTipY - headLength * Math.sin(angle - Math.PI / 6);
+        const rightX = arrowTipX - headLength * Math.cos(angle + Math.PI / 6);
+        const rightY = arrowTipY - headLength * Math.sin(angle + Math.PI / 6);
+        const arrowHead = `M ${arrowTipX} ${arrowTipY} L ${leftX} ${leftY} L ${rightX} ${rightY} Z`;
+
+        const labelX = cubicPoint(startPoint.x, control1.x, control2.x, lineEnd.x, 0.5);
+        const labelY = cubicPoint(startPoint.y, control1.y, control2.y, lineEnd.y, 0.5) - 8;
+
         return h(
           'g',
-          { key: edge.id },
+          { key: edge.id, className: 'link-edge' },
           [
             h('path', {
               d: path,
               fill: 'none',
               stroke: '#38bdf8',
-              strokeWidth: 4,
-              opacity: 1
+              'stroke-width': 3,
+              'stroke-linecap': 'round',
+              'stroke-linejoin': 'round',
+              opacity: 0.9
             }),
-            h('circle', {
-              cx: endX - 10,
-              cy: endY,
-              r: 6,
-              fill: '#38bdf8'
+            h('path', {
+              d: arrowHead,
+              fill: '#38bdf8',
+              opacity: 0.95
             }),
             edge.label
               ? h(
                   'text',
                   {
-                    x: midX,
-                    y: startY + (endY - startY) * 0.5 - 6,
+                    x: labelX,
+                    y: labelY,
                     className: 'edge-label'
                   },
                   edge.label
@@ -1411,68 +1815,51 @@
   }
 
   function NextStateSelect({ node, nextOptions, onChange }) {
-    const [localValue, setLocalValue] = useState(node.transitions.next || '');
-    
-    // Sincronizar valor local cuando cambia el nodo
-    useEffect(() => {
-      const expectedValue = node.transitions.next || '';
-      console.log('🔄 NextStateSelect sync:', { 
-        localValue, 
-        expectedValue, 
-        nodeId: node.id 
-      });
-      setLocalValue(expectedValue);
-    }, [node.transitions.next, node.id]);
-    
+    const currentValue = node.transitions.next || '';
+
     const handleChange = (event) => {
       const newValue = event.target.value;
-      console.log('🔄 NextStateSelect handleChange:', { from: localValue, to: newValue });
-      setLocalValue(newValue);
-      onChange(event);
+      onChange(newValue ? newValue : null);
     };
-    
+
+    const renderOption = (option) =>
+      h(
+        'option',
+        {
+          key: option.id,
+          value: option.id,
+          selected: option.id === currentValue
+        },
+        option.label
+      );
+
     return h(
       'select',
       {
-        value: localValue,
+        value: currentValue,
         disabled: node.transitions.end,
         onChange: handleChange
       },
       [
-        h('option', { value: '' }, '— None —'),
-        ...nextOptions.map((option) =>
-          h('option', { key: option.id, value: option.id }, option.label)
-        )
+        h('option', { value: '', selected: currentValue === '' }, '— None —'),
+        ...nextOptions.map(renderOption)
       ]
     );
   }
 
   function NodeGeneralSettings({ flow, node, dispatch }) {
-    const selectRef = useRef(null);
-    
     console.log('🔧 NodeGeneralSettings render:', {
       nodeId: node.id,
       nodeName: node.name,
       currentNext: node.transitions.next,
       allTransitions: node.transitions
     });
-    
+
     const nextOptions = flow.order
       .filter((id) => id !== node.id)
       .map((id) => ({ id, label: flow.nodes[id].name }));
-      
+
     console.log('🔧 NextOptions disponibles:', nextOptions);
-    
-    // Forzar sincronización del select cuando cambia node.transitions.next
-    useEffect(() => {
-      if (selectRef.current) {
-        const expectedValue = node.transitions.next || '';
-        if (selectRef.current.value !== expectedValue) {
-          console.log('🔧 Sincronizando select:', selectRef.current.value, '->', expectedValue);
-          selectRef.current.value = expectedValue;
-        }
-      }
-    }, [node.transitions.next]);
 
     const handleNameChange = useCallback((event) => {
       const value = event.target.value;
@@ -1511,12 +1898,11 @@
       });
     };
 
-    const handleNextChange = (event) => {
-      const nextValue = event.target.value || null;
-      console.log('🔄 handleNextChange:', { 
-        from: node.transitions.next, 
-        to: nextValue, 
-        nodeId: node.id 
+    const handleNextChange = (nextValue) => {
+      console.log('🔄 handleNextChange:', {
+        from: node.transitions.next,
+        to: nextValue,
+        nodeId: node.id
       });
       dispatch({
         type: 'UPDATE_NODE',
@@ -1573,11 +1959,7 @@
       supportsNextTransition(node.type)
         ? h('div', { className: 'form-field' }, [
             h('label', null, 'Next state'),
-            h(NextStateSelect, {
-              node,
-              nextOptions,
-              onChange: handleNextChange
-            })
+            h(NextStateSelect, { node, nextOptions, onChange: handleNextChange })
           ])
         : null,
       h('div', { className: 'switch-row' }, [
@@ -2277,35 +2659,70 @@
       dispatch({ type: 'REMOVE_PARALLEL_BRANCH', flowId, nodeId: node.id, index });
     };
 
+    const renderBranch = (branchId, index) => {
+      const branch = flows[branchId];
+      const options = branch
+        ? branch.order.map((id) => ({ id, label: branch.nodes[id].name }))
+        : [];
+      const startNodeId = branch && branch.startNodeId ? branch.startNodeId : '';
+      const hasNodes = options.length > 0;
+
+      const handleStartChange = (event) => {
+        const value = event.target.value;
+        if (!value || !branch) {
+          return;
+        }
+        dispatch({ type: 'SET_FLOW_START', flowId: branchId, nodeId: value });
+      };
+
+      return h('div', { className: 'branch-card', key: branchId }, [
+        h('div', { className: 'branch-card-header' }, [
+          h('span', { className: 'branch-name' }, branch ? branch.label : `Branch ${index + 1}`),
+          h('div', { className: 'branch-actions' }, [
+            h(
+              'button',
+              { onClick: () => onNavigateFlow(branchId) },
+              'Open'
+            ),
+            branches.length > 1
+              ? h(
+                  'button',
+                  {
+                    onClick: () => removeBranch(index),
+                    style: {
+                      background: 'rgba(248,113,113,0.2)',
+                      color: 'rgba(248,113,113,0.9)'
+                    }
+                  },
+                  'Remove'
+                )
+              : null
+          ])
+        ]),
+        hasNodes
+          ? h('div', { className: 'form-field condensed' }, [
+              h('label', null, 'Start state'),
+              h(
+                'select',
+                {
+                  value: startNodeId,
+                  onChange: handleStartChange
+                },
+                [
+                  h('option', { value: '' }, '— Select —'),
+                  ...options.map((option) =>
+                    h('option', { key: option.id, value: option.id }, option.label)
+                  )
+                ]
+              )
+            ])
+          : h('div', { className: 'branch-hint' }, 'Add states to this branch to choose where it starts.')
+      ]);
+    };
+
     return h(Fragment, null, [
       branches.length
-        ? branches.map((branchId, index) => {
-            const branch = flows[branchId];
-            return h('div', { className: 'branch-card', key: branchId }, [
-              h('span', null, branch ? branch.label : `Branch ${index + 1}`),
-              h('div', null, [
-                h(
-                  'button',
-                  { onClick: () => onNavigateFlow(branchId) },
-                  'Open'
-                ),
-                branches.length > 1
-                  ? h(
-                      'button',
-                      {
-                        onClick: () => removeBranch(index),
-                        style: {
-                          marginLeft: '8px',
-                          background: 'rgba(248,113,113,0.2)',
-                          color: 'rgba(248,113,113,0.9)'
-                        }
-                      },
-                      'Remove'
-                    )
-                  : null
-              ])
-            ]);
-          })
+        ? branches.map((branchId, index) => renderBranch(branchId, index))
         : h('div', { className: 'empty-state' }, 'No branches defined yet.'),
       h(
         'button',
@@ -2503,9 +2920,10 @@
     const [nodeRects, setNodeRects] = useState({});
     const [installPending, setInstallPending] = useState(false);
     const [installError, setInstallError] = useState('');
+    const [pan, setPan] = useState({ x: 0, y: 0 });
     const canvasRef = useRef(null);
     const flow = state.flows[state.currentFlowId];
-    
+
     // Exponer estado para debugging
     window.debugState = state;
     window.debugDispatch = dispatch;
@@ -2513,40 +2931,44 @@
     useCatalogs(dispatch);
     useToasts(state, dispatch);
 
-    useEffect(() => {
-      if (!flow || !canvasRef.current) return;
-      
-      // Usar requestAnimationFrame para asegurar que el layout esté completo
-      const captureRects = () => {
-        const container = canvasRef.current;
-        if (!container) return;
-        
-        const rects = {};
-        const containerRect = container.getBoundingClientRect();
-        
-        // Buscar nodos directamente en el container
-        flow.order.forEach((nodeId) => {
-          const element = container.querySelector(`[data-node-id="${nodeId}"]`);
-          if (element) {
-            const rect = element.getBoundingClientRect();
-            rects[nodeId] = {
-              left: rect.left - containerRect.left,
-              top: rect.top - containerRect.top,
-              width: rect.width,
-              height: rect.height
-            };
-            console.log('📐 Rect capturado para', nodeId, ':', rects[nodeId]);
-          } else {
-            console.log('❌ No se encontró elemento para', nodeId);
+    const handleMeasureNodeRect = useCallback((nodeId, rect) => {
+      setNodeRects((prev) => {
+        if (rect) {
+          const existing = prev[nodeId];
+          if (
+            existing &&
+            existing.left === rect.left &&
+            existing.top === rect.top &&
+            existing.width === rect.width &&
+            existing.height === rect.height
+          ) {
+            return prev;
           }
-        });
-        
-        console.log('📐 RequestAnimationFrame: nodeRects capturados:', Object.keys(rects).length);
-        setNodeRects(rects);
-      };
-      
-      requestAnimationFrame(captureRects);
-    }, [flow, state.revision]);
+          return { ...prev, [nodeId]: rect };
+        }
+        if (!prev[nodeId]) {
+          return prev;
+        }
+        const next = { ...prev };
+        delete next[nodeId];
+        return next;
+      });
+    }, []);
+
+    useEffect(() => {
+      if (!flow) {
+        return;
+      }
+      setPan({ x: 0, y: 0 });
+    }, [flow && flow.id]);
+
+    useEffect(() => {
+      if (!flow) {
+        setNodeRects({});
+        return;
+      }
+      setNodeRects({});
+    }, [flow && flow.id]);
 
     const edges = useMemo(() => computeEdges(flow), [flow, state.revision]);
 
@@ -2592,6 +3014,15 @@
       },
       [dispatch]
     );
+
+    const handlePanChange = useCallback((nextPan) => {
+      setPan((prev) => {
+        if (prev.x === nextPan.x && prev.y === nextPan.y) {
+          return prev;
+        }
+        return nextPan;
+      });
+    }, []);
 
     const handleDownload = () => {
       const payload = buildFlowExport(state);
@@ -2759,7 +3190,10 @@
           onDropNode: handleDropNode,
           onSelectNode: handleSelectNode,
           onMoveNode: handleMoveNode,
-          onOpenFlow: handleNavigateFlow
+          onOpenFlow: handleNavigateFlow,
+          onMeasureNode: handleMeasureNodeRect,
+          pan,
+          onPanChange: handlePanChange
         }),
         h(ConfigPanel, {
           flows: state.flows,

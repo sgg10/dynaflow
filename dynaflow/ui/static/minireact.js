@@ -1,6 +1,7 @@
 (function (global) {
   const TEXT_ELEMENT = "__text__";
   const Fragment = Symbol("Fragment");
+  const SVG_NS = "http://www.w3.org/2000/svg";
 
   class ComponentInstance {
     constructor(type, key) {
@@ -19,6 +20,145 @@
   let renderScheduled = false;
   let visitedInstances = new Set();
   let queuedEffects = [];
+
+  const NON_TEXT_INPUT_TYPES = new Set([
+    "button",
+    "checkbox",
+    "color",
+    "file",
+    "hidden",
+    "image",
+    "radio",
+    "range",
+    "reset",
+    "submit"
+  ]);
+
+  function isTextLikeElement(element) {
+    if (!element) {
+      return false;
+    }
+    const tag = element.tagName;
+    if (tag === "TEXTAREA") {
+      return true;
+    }
+    if (tag === "INPUT") {
+      const type = (element.type || "").toLowerCase();
+      return !NON_TEXT_INPUT_TYPES.has(type);
+    }
+    return Boolean(element.isContentEditable);
+  }
+
+  function escapeSelector(value) {
+    if (global.CSS && typeof global.CSS.escape === "function") {
+      return global.CSS.escape(value);
+    }
+    return String(value).replace(/["\\]/g, "\\$&");
+  }
+
+  function captureFocusSnapshot(container) {
+    if (!container) {
+      return null;
+    }
+    const active = document.activeElement;
+    if (!active || !container.contains(active)) {
+      return null;
+    }
+    const path = active.dataset ? active.dataset.miniPath : null;
+    if (!path) {
+      return null;
+    }
+    const snapshot = { path };
+    if (isTextLikeElement(active)) {
+      try {
+        snapshot.selectionStart = active.selectionStart;
+        snapshot.selectionEnd = active.selectionEnd;
+      } catch (err) {
+        snapshot.selectionStart = null;
+        snapshot.selectionEnd = null;
+      }
+    }
+    return snapshot;
+  }
+
+  function captureScrollSnapshot(container) {
+    if (!container) {
+      return [];
+    }
+    const result = [];
+    const elements = container.querySelectorAll("[data-mini-path]");
+    elements.forEach((element) => {
+      const path = element.getAttribute("data-mini-path");
+      if (!path) {
+        return;
+      }
+      const canScrollY = element.scrollHeight > element.clientHeight + 1;
+      const canScrollX = element.scrollWidth > element.clientWidth + 1;
+      if (!canScrollY && !canScrollX) {
+        return;
+      }
+      result.push({
+        path,
+        top: canScrollY ? element.scrollTop : null,
+        left: canScrollX ? element.scrollLeft : null
+      });
+    });
+    return result;
+  }
+
+  function restoreFocusSnapshot(snapshot) {
+    if (!snapshot || !rootContainer) {
+      return;
+    }
+    const target = rootContainer.querySelector(
+      `[data-mini-path="${escapeSelector(snapshot.path)}"]`
+    );
+    if (!target || typeof target.focus !== "function" || target.hasAttribute("disabled")) {
+      return;
+    }
+    try {
+      target.focus({ preventScroll: true });
+    } catch (err) {
+      target.focus();
+    }
+    if (
+      snapshot.selectionStart != null &&
+      typeof target.setSelectionRange === "function" &&
+      isTextLikeElement(target)
+    ) {
+      const value = target.value != null ? String(target.value) : "";
+      const length = value.length;
+      const start = Math.max(0, Math.min(snapshot.selectionStart, length));
+      const end = snapshot.selectionEnd != null
+        ? Math.max(0, Math.min(snapshot.selectionEnd, length))
+        : start;
+      try {
+        target.setSelectionRange(start, end);
+      } catch (err) {
+        // ignore selection errors
+      }
+    }
+  }
+
+  function restoreScrollSnapshot(snapshot) {
+    if (!snapshot || !rootContainer) {
+      return;
+    }
+    snapshot.forEach((entry) => {
+      const target = rootContainer.querySelector(
+        `[data-mini-path="${escapeSelector(entry.path)}"]`
+      );
+      if (!target) {
+        return;
+      }
+      if (entry.top != null) {
+        target.scrollTop = entry.top;
+      }
+      if (entry.left != null) {
+        target.scrollLeft = entry.left;
+      }
+    });
+  }
 
   function createElement(type, props, ...children) {
     const normalized = [];
@@ -70,22 +210,28 @@
     if (!rootContainer || !rootElement) {
       return;
     }
+    const focusSnapshot = captureFocusSnapshot(rootContainer);
+    const scrollSnapshot = captureScrollSnapshot(rootContainer);
     visitedInstances = new Set();
     queuedEffects = [];
     while (rootContainer.firstChild) {
       rootContainer.removeChild(rootContainer.firstChild);
     }
-    renderNode(rootElement, rootContainer, "root");
+    renderNode(rootElement, rootContainer, "root", null);
     cleanupUnusedInstances();
+    restoreScrollSnapshot(scrollSnapshot);
+    restoreFocusSnapshot(focusSnapshot);
     runQueuedEffects();
   }
 
-  function renderNode(element, container, path) {
+  function renderNode(element, container, path, namespace) {
     if (element == null) {
       return;
     }
     if (Array.isArray(element)) {
-      element.forEach((child, index) => renderNode(child, container, path + "." + index));
+      element.forEach((child, index) =>
+        renderNode(child, container, path + "." + index, namespace)
+      );
       return;
     }
 
@@ -98,7 +244,9 @@
 
     if (type === Fragment) {
       const fragmentChildren = props.children || [];
-      fragmentChildren.forEach((child, index) => renderNode(child, container, path + "." + index));
+      fragmentChildren.forEach((child, index) =>
+        renderNode(child, container, path + "." + index, namespace)
+      );
       return;
     }
 
@@ -118,17 +266,42 @@
       instance.hookIndex = 0;
       instance.pendingEffects = [];
       const output = type(Object.assign({}, props));
-      renderNode(output, container, key);
+      renderNode(output, container, key, namespace);
       queuedEffects.push({ key, instance, effects: instance.pendingEffects.slice() });
       currentInstance = prevInstance;
       return;
     }
 
-    const dom = document.createElement(type);
+    const isSvg = namespace === SVG_NS || type === "svg";
+    const nextNamespace = type === "svg" ? SVG_NS : namespace;
+    const dom = isSvg
+      ? document.createElementNS(SVG_NS, type)
+      : document.createElement(type);
     visitedInstances.add(path);
+    if (dom.dataset) {
+      dom.dataset.miniPath = path;
+    } else {
+      dom.setAttribute("data-mini-path", path);
+    }
     applyProps(dom, {}, props || {});
     const children = props && props.children ? props.children : [];
-    children.forEach((child, index) => renderNode(child, dom, path + ":" + index));
+    children.forEach((child, index) =>
+      renderNode(child, dom, path + ":" + index, nextNamespace)
+    );
+    if (
+      type === "select" &&
+      props &&
+      Object.prototype.hasOwnProperty.call(props, "value")
+    ) {
+      dom.value = props.value == null ? "" : props.value;
+    }
+    if (
+      (type === "input" || type === "textarea") &&
+      props &&
+      Object.prototype.hasOwnProperty.call(props, "value")
+    ) {
+      dom.value = props.value == null ? "" : props.value;
+    }
     container.appendChild(dom);
   }
 
@@ -166,6 +339,29 @@
     if (name.startsWith("on") && typeof value === "function") {
       const eventName = name.slice(2).toLowerCase();
       dom.addEventListener(eventName, value);
+      return;
+    }
+    if (name === "selected" && "selected" in dom) {
+      const isSelected = Boolean(value);
+      dom.selected = isSelected;
+      if (!isSelected) {
+        dom.removeAttribute("selected");
+      } else {
+        dom.setAttribute("selected", "");
+      }
+      return;
+    }
+    if (name === "value" && "value" in dom) {
+      if (value === false || value === null || value === undefined) {
+        dom.value = "";
+        dom.removeAttribute("value");
+      } else {
+        dom.value = value;
+      }
+      return;
+    }
+    if (name === "checked" && "checked" in dom) {
+      dom.checked = Boolean(value);
       return;
     }
     if (value === false || value === null || value === undefined) {
